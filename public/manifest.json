@@ -1,0 +1,9 @@
+{
+  "name": "Selah",
+  "short_name": "Selah",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7faf6",
+  "theme_color": "#f7faf6",
+  "icons": []
+}

@@ -1,0 +1,31 @@
+# SPA routing: any path that isn't a real file/directory falls through to
+# index.html so react-router-dom can handle it client-side (otherwise
+# refreshing on e.g. /conquest gives Apache's 404 instead of the app).
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+  RewriteRule ^index\.html$ - [L]
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule . /index.html [L]
+</IfModule>
+
+# Fallback for hosts where the above RewriteRule doesn't apply (e.g. an edge/
+# CDN layer in front of Apache that answers 404s itself, or AllowOverride
+# restricting RewriteRule specifically) — serve index.html as the 404
+# document itself, so client-side routing still boots correctly.
+ErrorDocument 404 /index.html
+
+# index.html/index.js/index.css keep a stable, unhashed filename on purpose
+# (see vite.config.ts) so the pasted 404 fallback above never goes stale —
+# but that means the URL never changes between deploys, so nothing tells a
+# browser/CDN to fetch a fresh copy. Force revalidation on every request for
+# just these; lazy route chunks keep their per-build hash and can cache hard.
+<IfModule mod_headers.c>
+  <FilesMatch "^(index\.html|app\.(js|css))$">
+    Header set Cache-Control "no-cache, must-revalidate"
+  </FilesMatch>
+  <FilesMatch "-[A-Za-z0-9_]{6,}\.(js|css)$">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+  </FilesMatch>
+</IfModule>
