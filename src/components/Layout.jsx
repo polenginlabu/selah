@@ -3,17 +3,7 @@ import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
 import { disableNotifications, enableNotifications, onForegroundMessage, sendTestConquestReminder } from '../lib/firebase'
-import {
-  BellIcon,
-  FlagIcon,
-  LogOutIcon,
-  MoonIcon,
-  PencilIcon,
-  PlusIcon,
-  SproutIcon,
-  SunIcon,
-  TrophyIcon,
-} from '../icons'
+import { BellIcon, FlagIcon, LogOutIcon, MoonIcon, PencilIcon, SproutIcon, SunIcon, TrophyIcon } from '../icons'
 
 const DEVELOPER_EMAIL = 'johnpaul.dj21@gmail.com'
 
@@ -21,7 +11,6 @@ export function Layout() {
   const { user, logout } = useAuth()
   const { theme, toggle } = useTheme()
   const location = useLocation()
-  const showComposeButton = location.pathname === '/' || location.pathname.startsWith('/devotion')
 
   useEffect(() => {
     let unsubscribe
@@ -38,10 +27,8 @@ export function Layout() {
       <header className="sticky top-0 z-sticky border-b border-line/70 bg-canvas/70 backdrop-blur-xl">
         <div className="flex items-center justify-between gap-2 px-4 py-3">
           <Link to="/" className="group flex items-center gap-2">
-            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-brand-wash text-brand-strong transition-transform group-hover:scale-105 dark:text-brand">
-              <SproutIcon width={18} height={18} />
-            </span>
-            <span className="font-serif text-lg font-semibold tracking-tight">Selah</span>
+            <img src="/SELAH_dark.png" alt="Selah" className="h-7 w-auto dark:hidden" />
+            <img src="/SELAH_light.png" alt="Selah" className="hidden h-7 w-auto dark:block" />
           </Link>
           <div className="flex items-center gap-1">
             <button
@@ -64,15 +51,6 @@ export function Layout() {
       </main>
 
       <div className="fixed inset-x-0 bottom-0 z-sticky mx-auto max-w-xl">
-        {showComposeButton && (
-          <Link
-            to="/devotion/new"
-            aria-label="New devotion"
-            className="absolute -top-16 right-4 flex h-14 w-14 items-center justify-center rounded-full bg-brand-strong text-brand-on shadow-lift transition-all duration-150 ease-out-expo hover:brightness-[1.05] active:scale-95"
-          >
-            <PlusIcon width={22} height={22} />
-          </Link>
-        )}
         <nav
           className="border-t border-line/70 bg-canvas/80 backdrop-blur-xl"
           style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
@@ -108,6 +86,7 @@ function NavItem({ to, end, icon, label }) {
 
 function AccountMenu({ user, onSignOut }) {
   const [open, setOpen] = useState(false)
+  const [avatarError, setAvatarError] = useState(false)
   const menuRef = useRef(null)
 
   useEffect(() => {
@@ -135,8 +114,14 @@ function AccountMenu({ user, onSignOut }) {
         aria-label="Account menu"
         className="rounded-full ring-2 ring-transparent transition hover:ring-brand/40"
       >
-        {user?.user_metadata?.avatar_url ? (
-          <img src={user.user_metadata.avatar_url} alt="" className="h-8 w-8 rounded-full" />
+        {user?.user_metadata?.avatar_url && !avatarError ? (
+          <img
+            src={user.user_metadata.avatar_url}
+            alt=""
+            referrerPolicy="no-referrer"
+            onError={() => setAvatarError(true)}
+            className="h-8 w-8 rounded-full"
+          />
         ) : (
           <span className="flex h-8 w-8 items-center justify-center rounded-full bg-raised text-sm font-semibold text-muted">
             {(user?.email ?? '?')[0]?.toUpperCase()}

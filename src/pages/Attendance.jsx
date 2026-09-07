@@ -207,7 +207,7 @@ export default function Attendance() {
         <span className="text-4xl opacity-40" aria-hidden={true}>
           📋
         </span>
-        <h2 className="font-serif text-lg font-semibold text-ink">No disciples yet</h2>
+        <h2 className="font-sans text-lg font-semibold text-ink">No disciples yet</h2>
         <p className="text-sm text-muted text-pretty">
           Add disciples in the Disciple tab first, then you can track their attendance here.
         </p>
@@ -220,7 +220,7 @@ export default function Attendance() {
       <header className="flex items-center justify-between gap-2">
         <div>
           <p className="text-[0.65rem] font-semibold uppercase tracking-wide text-muted">Discipleship</p>
-          <h1 className="mt-0.5 font-serif text-2xl font-semibold tracking-tight">Attendance</h1>
+          <h1 className="mt-0.5 font-sans text-2xl font-semibold tracking-tight">Attendance</h1>
         </div>
         <Link
           to="/attendance/reports"
@@ -470,7 +470,7 @@ function AddServiceModal({ onSubmit, onClose }) {
         </div>
         <div className="space-y-4 px-5 pb-[calc(1.5rem+env(safe-area-inset-bottom))] pt-3">
           <div className="flex items-center justify-between">
-            <h3 className="font-serif text-base font-semibold tracking-tight">Add Service</h3>
+            <h3 className="font-sans text-base font-semibold tracking-tight">Add Service</h3>
             <button
               onClick={onClose}
               className="flex h-7 w-7 items-center justify-center rounded-full bg-raised text-muted"

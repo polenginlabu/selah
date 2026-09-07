@@ -279,7 +279,7 @@ export default function DevotionEditor() {
           </button>
         )}
       </div>
-      <h1 className="font-serif text-xl font-semibold tracking-tight">{isNew ? 'New devotion' : 'Edit devotion'}</h1>
+      <h1 className="font-sans text-xl font-semibold tracking-tight">{isNew ? 'New devotion' : 'Edit devotion'}</h1>
       {draftRestored && (
         <div className="flex items-center justify-between gap-3 rounded-xl bg-brand-wash px-4 py-2.5 text-sm">
           <span className="text-ink">Unsaved draft restored.</span>
@@ -328,7 +328,7 @@ export default function DevotionEditor() {
               <XIcon width={10} height={10} />
             </button>
           </div>
-          <p className="mt-1.5 font-serif text-sm italic leading-relaxed text-ink/85">“{verse.text}”</p>
+          <p className="mt-1.5 font-sans text-sm italic leading-relaxed text-ink/85">“{verse.text}”</p>
         </div>
       )}
       {!verse && (
@@ -459,7 +459,7 @@ function SoapField({ badge, label, hint, value, onChange, rows = 4 }) {
     <label className="block">
       <span className="flex items-center gap-2">
         {badge && (
-          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-brand-wash font-serif text-xs font-bold text-brand-strong dark:text-brand">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-brand-wash font-sans text-xs font-bold text-brand-strong dark:text-brand">
             {badge}
           </span>
         )}

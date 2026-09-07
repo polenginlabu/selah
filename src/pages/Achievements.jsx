@@ -60,7 +60,7 @@ export default function Achievements() {
       <header className="relative flex items-center justify-between gap-2">
         <div>
           <p className="eyebrow">Spiritual Journey</p>
-          <h1 className="mt-1 font-serif text-2xl font-semibold tracking-tight text-balance">My Progress</h1>
+          <h1 className="mt-1 font-sans text-2xl font-semibold tracking-tight text-balance">My Progress</h1>
         </div>
         <button
           type="button"
@@ -93,7 +93,7 @@ export default function Achievements() {
           />
           <div className="min-w-0 flex-1">
             <p className="text-xs text-muted">Hello,</p>
-            <h2 className="truncate font-serif text-lg font-semibold leading-tight text-ink">{user?.user_metadata?.full_name || 'friend'}</h2>
+            <h2 className="truncate font-sans text-lg font-semibold leading-tight text-ink">{user?.user_metadata?.full_name || 'friend'}</h2>
             <span
               className="mt-1 inline-flex items-center rounded-full border px-2.5 py-1 text-[0.7rem] font-bold"
               style={{
@@ -138,7 +138,7 @@ export default function Achievements() {
             { value: `${(stats.xp / 1e3).toFixed(1)}k`, label: 'points' },
           ].map((stat) => (
             <div className="rounded-xl bg-raised px-2 py-3 text-center" key={stat.label}>
-              <p className="font-serif text-xl font-bold tabular-nums text-ink">{stat.value}</p>
+              <p className="font-sans text-xl font-bold tabular-nums text-ink">{stat.value}</p>
               <p className="mt-0.5 truncate text-[0.65rem] font-medium text-muted">{stat.label}</p>
             </div>
           ))}
@@ -160,7 +160,7 @@ export default function Achievements() {
       {false}
       <section className="card p-5" aria-label="Growth by category">
         <div className="flex items-baseline justify-between gap-2">
-          <h2 className="font-serif text-lg font-semibold tracking-tight">Growth by category</h2>
+          <h2 className="font-sans text-lg font-semibold tracking-tight">Growth by category</h2>
           <span className="text-[0.65rem] font-medium text-muted">Lifetime activity</span>
         </div>
         <div className="mt-2 divide-y divide-line">
@@ -207,7 +207,7 @@ export default function Achievements() {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <h3
-                      className={`font-serif text-lg font-bold ${isUnlocked ? '' : 'text-muted'}`}
+                      className={`font-sans text-lg font-bold ${isUnlocked ? '' : 'text-muted'}`}
                       style={isUnlocked ? { color: tier.color } : undefined}
                     >
                       {tier.name}
@@ -358,13 +358,21 @@ export default function Achievements() {
 }
 
 function Avatar({ photoURL, name, email, color, level }) {
+  const [imgError, setImgError] = useState(false)
   return (
     <div className="relative shrink-0">
-      {photoURL ? (
-        <img src={photoURL} alt="" className="h-16 w-16 rounded-full object-cover" style={{ border: `2.5px solid ${color}` }} />
+      {photoURL && !imgError ? (
+        <img
+          src={photoURL}
+          alt=""
+          referrerPolicy="no-referrer"
+          onError={() => setImgError(true)}
+          className="h-16 w-16 rounded-full object-cover"
+          style={{ border: `2.5px solid ${color}` }}
+        />
       ) : (
         <div
-          className="flex h-16 w-16 items-center justify-center rounded-full font-serif text-lg font-bold"
+          className="flex h-16 w-16 items-center justify-center rounded-full font-sans text-lg font-bold"
           style={{
             color,
             backgroundImage: `linear-gradient(135deg, ${withOpacity(color, 0.22)}, ${withOpacity(color, 0.06)})`,

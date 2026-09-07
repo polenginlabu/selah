@@ -42,6 +42,19 @@ body {
   @apply bg-canvas text-ink font-sans;
 }
 
+.devotion-page {
+  --brand: 0.25 0.055 258;
+  --brand-strong: 0.25 0.055 258;
+  --brand-wash: 0.95 0.014 258;
+}
+
+.dark .devotion-page {
+  --brand: 0.62 0.08 258;
+  --brand-strong: 0.29 0.055 258;
+  --brand-wash: 0.24 0.028 258;
+  --on-brand: 0.95 0.008 95;
+}
+
 @layer components {
   .btn-primary {
     @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-150 bg-brand-strong text-on-brand shadow-[0_1px_2px_oklch(var(--ink)/0.04),0_4px_16px_-6px_oklch(var(--ink)/0.1)];

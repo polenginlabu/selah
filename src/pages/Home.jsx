@@ -96,13 +96,13 @@ export function Home() {
   const isEmpty = total === 0 && devotions !== null && devotions.length === 0 && !isFiltering
 
   return (
-    <div className="space-y-6">
+    <div className="devotion-page space-y-6">
       <header>
         <p className="eyebrow">
           {getGreeting()}
           {firstName ? `, ${firstName}` : ''}
         </p>
-        <h1 className="mt-1 font-serif text-2xl font-semibold tracking-tight text-balance">
+        <h1 className="mt-1 font-sans text-2xl font-semibold tracking-tight text-balance">
           {total === 0 ? 'Begin your first devotion' : getHeadline(streak, doneToday)}
         </h1>
         {meta && total > 0 && (
@@ -155,6 +155,12 @@ export function Home() {
         >
           <span className="font-semibold text-brand-strong dark:text-brand">On this day last year</span> you
           wrote "{lastYearEntry.title || 'Untitled devotion'}" — look back at what God was doing.
+        </Link>
+      )}
+
+      {total > 0 && (
+        <Link to="/devotion/new" className="btn-primary w-full">
+          <PlusIcon width={16} height={16} /> Write a devotion
         </Link>
       )}
 
@@ -249,7 +255,7 @@ function VerseOfTheDayCard({ verse, doneToday }) {
         </p>
         <p className="text-sm font-semibold text-accent-ink">{verse.reference}</p>
       </div>
-      <blockquote className="mt-3 font-serif text-lg italic leading-relaxed text-ink/90 text-pretty">
+      <blockquote className="mt-3 font-sans text-lg italic leading-relaxed text-ink/90 text-pretty">
         "{verse.text}"
       </blockquote>
       <div className="mt-4 flex flex-wrap items-center gap-3">
@@ -288,7 +294,7 @@ function WeekStrip({ dayCounts, today }) {
             key={day}
             title={`${formatDateLong(day)}${journaled ? ' — journaled' : ''}`}
             className={`flex h-6 w-6 items-center justify-center rounded-full text-[0.6rem] font-semibold ${
-              journaled ? 'bg-brand-strong text-brand-on' : 'bg-raised text-muted'
+              journaled ? 'bg-brand-strong text-on-brand' : 'bg-raised text-muted'
             } ${day === today ? 'ring-1 ring-brand ring-offset-1 ring-offset-canvas' : ''}`}
           >
             {weekdayLetter(day)}
@@ -416,7 +422,7 @@ function DevotionCard({ devotion }) {
         <span className="chip-brand">{DEVOTION_METHOD_LABELS[devotion.method]}</span>
         <time className="text-xs font-medium text-muted">{formatDateShort(devotion.date)}</time>
       </div>
-      <h3 className="mt-2.5 font-serif text-lg font-semibold leading-snug text-balance">
+      <h3 className="mt-2.5 font-sans text-lg font-semibold leading-snug text-balance">
         {devotion.title || 'Untitled devotion'}
       </h3>
       {devotion.verse && <p className="mt-0.5 text-sm font-medium text-accent-ink">{devotion.verse.reference}</p>}

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { useToast } from '../context/ToastContext'
 import { withOpacity } from '../lib/gamification'
 import {
   SproutIcon,
@@ -17,6 +18,7 @@ import {
   PhoneIcon,
   XIcon,
   TrashIcon,
+  BranchIcon,
 } from '../icons'
 import {
   searchProfiles,
@@ -25,6 +27,8 @@ import {
   addManualDisciple,
   addLinkedDisciple,
   removeDisciple,
+  moveDisciple,
+  updateDiscipleGeneration,
   updateDiscipleNotes,
   linkDiscipleToProfile,
   unlinkDisciple,
@@ -151,12 +155,14 @@ function computeTreeLayout(people, rootId) {
 
 export default function DiscipleTree() {
   const { user } = useAuth()
+  const toast = useToast()
   const [people, setPeople] = useState({})
   const [rootId, setRootId] = useState(null)
   const [loading, setLoading] = useState(true)
   const [selectedId, setSelectedId] = useState(null)
   const [addModal, setAddModal] = useState({ open: false, mentorId: '' })
   const [linkTargetId, setLinkTargetId] = useState(null)
+  const [moveTargetId, setMoveTargetId] = useState(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const scrollRef = useRef(null)
 
@@ -230,13 +236,13 @@ export default function DiscipleTree() {
             })
           }
           await loadTree()
-          alert(`${created.name} was added to the tree.`)
+          toast.success(`${created.name} was added to the tree.`)
         } catch (err) {
           console.error('Failed to add disciple:', err)
-          alert('Something went wrong adding this disciple — please try again.')
+          toast.error('Something went wrong adding this disciple — please try again.')
         }
     },
-    [user, people, loadTree]
+    [user, people, loadTree, toast]
   )
 
   const handleLinkMember = useCallback(
@@ -244,14 +250,14 @@ export default function DiscipleTree() {
       try {
         await linkDiscipleToProfile(id, profile)
         await loadTree()
-        alert(`Linked to ${profile.full_name || 'member'}.`)
+        toast.success(`Linked to ${profile.full_name || 'member'}.`)
       } catch (err) {
         console.error('Failed to link disciple:', err)
-        alert('Something went wrong linking this member — please try again.')
+        toast.error('Something went wrong linking this member — please try again.')
       }
       setLinkTargetId(null)
     },
-    [loadTree]
+    [loadTree, toast]
   )
 
   const handleUpdateNotes = useCallback(async (id, notes) => {
@@ -289,6 +295,36 @@ export default function DiscipleTree() {
         }
     },
     [people]
+  )
+
+  const handleMoveDisciple = useCallback(
+    async (id, newMentorId) => {
+      const person = people[id]
+      const newMentor = people[newMentorId]
+      if (!person || !newMentor) return
+      const delta = newMentor.generation + 1 - person.generation
+      const collectSubtree = (nodeId) => {
+        const node = people[nodeId]
+        if (!node) return []
+        return [nodeId, ...node.discipleIds.flatMap(collectSubtree)]
+      }
+      const descendantIds = collectSubtree(id).filter((subtreeId) => subtreeId !== id)
+      try {
+        await moveDisciple(id, newMentorId, person.generation + delta)
+        await Promise.all(
+          descendantIds.map((descendantId) =>
+            updateDiscipleGeneration(descendantId, people[descendantId].generation + delta)
+          )
+        )
+        await loadTree()
+        toast.success(`${person.name} now reports to ${newMentor.id === rootId ? 'you' : newMentor.name}.`)
+        setMoveTargetId(null)
+      } catch (err) {
+        console.error('Failed to move disciple:', err)
+        toast.error('Something went wrong moving this disciple — please try again.')
+      }
+    },
+    [people, rootId, loadTree, toast]
   )
 
   const handleUnlinkDisciple = useCallback(async (id) => {
@@ -350,7 +386,7 @@ export default function DiscipleTree() {
             <SproutIcon width={13} height={13} className="text-brand" />
             Discipleship
           </p>
-          <h1 className="mt-1 font-serif text-2xl font-semibold tracking-tight text-balance">My Tree</h1>
+          <h1 className="mt-1 font-sans text-2xl font-semibold tracking-tight text-balance">My Tree</h1>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -387,7 +423,7 @@ export default function DiscipleTree() {
           { label: 'Your 12', value: `${rootId ? (people[rootId]?.discipleIds.length ?? 0) : 0}/12` },
         ].map((stat) => (
           <div className="card py-3 text-center" key={stat.label}>
-            <p className="font-serif text-xl font-bold tabular-nums text-ink">{stat.value}</p>
+            <p className="font-sans text-xl font-bold tabular-nums text-ink">{stat.value}</p>
             <p className="mt-0.5 text-[0.6rem] leading-tight text-muted">{stat.label}</p>
           </div>
         ))}
@@ -397,8 +433,8 @@ export default function DiscipleTree() {
           to="/attendance"
           className="card flex w-full items-center gap-3 p-4 text-left transition-all hover:-translate-y-0.5 hover:shadow-lift"
         >
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-500/15">
-            <CalendarIcon width={18} height={18} className="text-blue-500" />
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-wash">
+            <CalendarIcon width={18} height={18} className="text-brand" />
           </span>
           <div className="flex-1">
             <p className="text-sm font-bold text-ink">Attendance</p>
@@ -539,6 +575,7 @@ export default function DiscipleTree() {
             onSelect={(id) => setSelectedId(id)}
             onAddDisciple={(id) => setAddModal({ open: true, mentorId: id })}
             onLinkMember={(id) => setLinkTargetId(id)}
+            onMove={(id) => setMoveTargetId(id)}
             onUpdateNotes={handleUpdateNotes}
             onRemove={handleRemoveDisciple}
             onUnlink={handleUnlinkDisciple}
@@ -578,6 +615,18 @@ export default function DiscipleTree() {
             currentUserId={user?.id ?? ''}
             onLink={(profile) => handleLinkMember(linkTargetId, profile)}
             onClose={() => setLinkTargetId(null)}
+          />,
+          document.body
+        )}
+      {moveTargetId &&
+        people[moveTargetId] &&
+        createPortal(
+          <MoveDiscipleModal
+            person={people[moveTargetId]}
+            people={people}
+            rootId={rootId}
+            onMove={(newMentorId) => handleMoveDisciple(moveTargetId, newMentorId)}
+            onClose={() => setMoveTargetId(null)}
           />,
           document.body
         )}
@@ -716,6 +765,7 @@ function PersonDetailSheet({
   onSelect,
   onAddDisciple,
   onLinkMember,
+  onMove,
   onUpdateNotes,
   onRemove,
   onUnlink,
@@ -770,7 +820,7 @@ function PersonDetailSheet({
                 {getInitials(person.name)}
               </div>
               <div className="min-w-0 flex-1 pt-0.5">
-                <h2 className="font-serif text-lg font-semibold leading-snug text-ink">
+                <h2 className="font-sans text-lg font-semibold leading-snug text-ink">
                   {isRoot ? 'You' : person.name}
                 </h2>
                 <div className="mt-1.5 flex flex-wrap items-center gap-2">
@@ -988,6 +1038,15 @@ function PersonDetailSheet({
                   Unlink Member
                 </button>
               )}
+              {!isRoot && (
+                <button
+                  onClick={() => onMove(person.id)}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl border border-line py-3 text-sm font-semibold text-ink transition-colors active:scale-[0.98] active:bg-raised"
+                >
+                  <BranchIcon width={14} height={14} className="text-muted" />
+                  Move to Different Leader
+                </button>
+              )}
               {!isRoot &&
                 (confirmingRemove ? (
                   <div className="flex gap-2">
@@ -1089,7 +1148,7 @@ function AddDiscipleModal({ mentorId, mentorName, onAdd, onClose }) {
           <div className="flex items-center justify-between">
             <div>
               <p className="eyebrow">Add Disciple</p>
-              <h2 className="mt-1 font-serif text-xl font-semibold text-ink">
+              <h2 className="mt-1 font-sans text-xl font-semibold text-ink">
                 Adding to {mentorName === 'You' ? 'your' : `${mentorName.split(' ')[0]}'s`} tree
               </h2>
             </div>
@@ -1101,7 +1160,7 @@ function AddDiscipleModal({ mentorId, mentorName, onAdd, onClose }) {
             <button
               onClick={() => setMode('new')}
               className={`flex-1 rounded-xl py-2.5 text-sm font-semibold transition-colors ${
-                mode === 'new' ? 'bg-brand-strong text-brand-on' : 'bg-raised text-muted'
+                mode === 'new' ? 'bg-brand-strong text-on-brand' : 'bg-raised text-muted'
               }`}
             >
               New Person
@@ -1109,7 +1168,7 @@ function AddDiscipleModal({ mentorId, mentorName, onAdd, onClose }) {
             <button
               onClick={() => setMode('find')}
               className={`flex-1 rounded-xl py-2.5 text-sm font-semibold transition-colors ${
-                mode === 'find' ? 'bg-brand-strong text-brand-on' : 'bg-raised text-muted'
+                mode === 'find' ? 'bg-brand-strong text-on-brand' : 'bg-raised text-muted'
               }`}
             >
               Find Member
@@ -1204,7 +1263,12 @@ function AddDiscipleModal({ mentorId, mentorName, onAdd, onClose }) {
                   key={profile.id}
                 >
                   {profile.avatar_url ? (
-                    <img src={profile.avatar_url} alt="" className="h-11 w-11 shrink-0 rounded-xl object-cover" />
+                    <img
+                      src={profile.avatar_url}
+                      alt=""
+                      referrerPolicy="no-referrer"
+                      className="h-11 w-11 shrink-0 rounded-xl object-cover"
+                    />
                   ) : (
                     <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-brand-wash text-sm font-bold text-brand-strong">
                       {getInitials(profile.full_name || '?')}
@@ -1258,7 +1322,7 @@ function LinkMemberModal({ personName, currentUserId, onLink, onClose }) {
           <div className="flex items-center justify-between">
             <div>
               <p className="eyebrow">Link Member</p>
-              <h2 className="mt-1 font-serif text-xl font-semibold text-ink">
+              <h2 className="mt-1 font-sans text-xl font-semibold text-ink">
                 Connect {personName.split(' ')[0]} to an account
               </h2>
             </div>
@@ -1298,7 +1362,12 @@ function LinkMemberModal({ personName, currentUserId, onLink, onClose }) {
                 key={profile.id}
               >
                 {profile.avatar_url ? (
-                  <img src={profile.avatar_url} alt="" className="h-11 w-11 shrink-0 rounded-xl object-cover" />
+                  <img
+                    src={profile.avatar_url}
+                    alt=""
+                    referrerPolicy="no-referrer"
+                    className="h-11 w-11 shrink-0 rounded-xl object-cover"
+                  />
                 ) : (
                   <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-brand-wash text-sm font-bold text-brand-strong">
                     {getInitials(profile.full_name || '?')}
@@ -1313,6 +1382,99 @@ function LinkMemberModal({ personName, currentUserId, onLink, onClose }) {
                 </span>
               </button>
             ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function MoveDiscipleModal({ person, people, rootId, onMove, onClose }) {
+  const [query, setQuery] = useState('')
+
+  const excludedIds = useMemo(() => {
+    const ids = new Set([person.id])
+    const collect = (id) => {
+      for (const childId of people[id]?.discipleIds ?? []) {
+        ids.add(childId)
+        collect(childId)
+      }
+    }
+    collect(person.id)
+    return ids
+  }, [person.id, people])
+
+  const candidates = useMemo(() => {
+    const term = query.trim().toLowerCase()
+    return Object.values(people)
+      .filter((candidate) => !excludedIds.has(candidate.id) && !candidate.isForeignBranch)
+      .filter((candidate) => candidate.id !== person.mentorId)
+      .filter((candidate) => (candidate.id === rootId ? 'you' : candidate.name.toLowerCase()).includes(term))
+      .sort((a, b) => {
+        if (a.id === rootId) return -1
+        if (b.id === rootId) return 1
+        return a.name.localeCompare(b.name)
+      })
+  }, [people, excludedIds, query, rootId, person.mentorId])
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col justify-end">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="card relative flex max-h-[80vh] flex-col overflow-hidden rounded-b-none rounded-t-3xl border-b-0">
+        <div className="shrink-0 border-b border-line px-5 pb-4 pt-4">
+          <div className="mx-auto mb-5 h-1 w-10 rounded-full bg-line" />
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="eyebrow">Move Disciple</p>
+              <h2 className="mt-1 font-sans text-xl font-semibold text-ink">
+                Who should {person.name.split(' ')[0]} report to?
+              </h2>
+            </div>
+            <button onClick={onClose} className="flex h-9 w-9 items-center justify-center rounded-full bg-raised text-muted">
+              <XIcon width={17} height={17} />
+            </button>
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto px-5 py-5">
+          <div className="relative">
+            <SearchIcon width={16} height={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted" />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search leaders..."
+              autoFocus={true}
+              className="input pl-10"
+            />
+          </div>
+          <p className="mt-3 text-xs text-muted">
+            {person.name.split(' ')[0]}'s notes, history, and any disciples they lead move along with them.
+          </p>
+          <div className="mt-4 space-y-1">
+            {candidates.length === 0 && <p className="py-8 text-center text-sm text-muted">No matching leader found</p>}
+            {candidates.map((candidate) => {
+              const color = getGenerationColor(candidate.generation)
+              const displayName = candidate.id === rootId ? 'You' : candidate.name
+              return (
+                <button
+                  onClick={() => onMove(candidate.id)}
+                  className="flex w-full items-center gap-4 rounded-2xl px-4 py-3.5 transition-colors active:bg-raised"
+                  key={candidate.id}
+                >
+                  <div
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-sm font-bold"
+                    style={{ backgroundColor: color, color: '#0a0e0b' }}
+                  >
+                    {getInitials(candidate.name)}
+                  </div>
+                  <div className="min-w-0 flex-1 text-left">
+                    <p className="text-sm font-semibold text-ink">{displayName}</p>
+                    <p className="mt-0.5 text-xs text-muted">Gen {candidate.generation}</p>
+                  </div>
+                  <ChevronRightIcon width={15} height={15} className="shrink-0 text-muted" />
+                </button>
+              )
+            })}
           </div>
         </div>
       </div>

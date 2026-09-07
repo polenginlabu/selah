@@ -93,6 +93,16 @@ export async function removeDisciple(id) {
   if (error) throw error
 }
 
+export async function moveDisciple(id, newParentId, generation) {
+  const { error } = await supabase.from('disciples').update({ parent_id: newParentId, generation }).eq('id', id)
+  if (error) throw error
+}
+
+export async function updateDiscipleGeneration(id, generation) {
+  const { error } = await supabase.from('disciples').update({ generation }).eq('id', id)
+  if (error) throw error
+}
+
 export async function updateDiscipleNotes(id, notes) {
   const { error } = await supabase.from('disciples').update({ notes: notes || null }).eq('id', id)
   if (error) throw error

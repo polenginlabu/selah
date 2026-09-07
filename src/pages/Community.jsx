@@ -339,7 +339,7 @@ export default function Community() {
       <header className="relative flex items-center justify-between gap-2">
         <div>
           <p className="eyebrow">Church</p>
-          <h1 className="mt-1 font-serif text-2xl font-semibold tracking-tight text-balance">Community 🌱</h1>
+          <h1 className="mt-1 font-sans text-2xl font-semibold tracking-tight text-balance">Community 🌱</h1>
         </div>
         <button
           type="button"
@@ -355,7 +355,7 @@ export default function Community() {
             onClick={() => setActiveTab(tabKey)}
             aria-pressed={activeTab === tabKey}
             className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-2.5 text-xs font-bold transition-all duration-150 active:scale-[0.98] ${
-              activeTab === tabKey ? 'bg-brand-strong text-brand-on' : 'text-muted hover:bg-raised hover:text-ink'
+              activeTab === tabKey ? 'bg-brand-strong text-on-brand' : 'text-muted hover:bg-raised hover:text-ink'
             }`}
             key={tabKey}
           >

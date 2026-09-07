@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { ChevronLeftIcon, ChevronRightIcon, CheckIcon, XIcon } from '../icons'
-import { todayISO, startOfWeekMonday, addDays, formatMonthYear } from '../lib/date'
+import { todayISO, addDays, formatMonthYear } from '../lib/date'
 import { withOpacity } from '../lib/gamification'
 import { getOrCreateRootDisciple, getDiscipleTree } from '../data/disciples'
 import { SERVICES, getRecentServices, getAttendanceForServiceRange } from '../data/attendance'
@@ -57,19 +57,21 @@ export default function Reports() {
   }, [loadData])
 
   const weekBuckets = useMemo(() => {
-      const monthEnd = `${selectedMonth}-${pad2(daysInMonth(selectedMonth))}`,
+      const monthStart = `${selectedMonth}-01`,
+        monthEnd = `${selectedMonth}-${pad2(daysInMonth(selectedMonth))}`,
         buckets = []
-      let cursor = startOfWeekMonday(`${selectedMonth}-01`)
+      let cursor = monthStart
       while (cursor <= monthEnd) {
+        const bucketEnd = addDays(cursor, 6) > monthEnd ? monthEnd : addDays(cursor, 6)
         buckets.push({
           start: cursor,
-          end: addDays(cursor, 6),
+          end: bucketEnd,
           label: new Date(cursor + 'T00:00').toLocaleDateString('en-US', {
             month: 'short',
             day: 'numeric',
           }),
         })
-        cursor = addDays(cursor, 7)
+        cursor = addDays(bucketEnd, 1)
       }
       return buckets
     }, [selectedMonth]),
@@ -121,7 +123,7 @@ export default function Reports() {
         </Link>
         <div>
           <p className="text-[0.65rem] font-semibold uppercase tracking-wide text-muted">Analytics</p>
-          <h1 className="mt-0.5 font-serif text-2xl font-semibold tracking-tight">Attendance Report</h1>
+          <h1 className="mt-0.5 font-sans text-2xl font-semibold tracking-tight">Attendance Report</h1>
         </div>
       </header>
       <div className="no-scrollbar flex gap-1.5 overflow-x-auto">

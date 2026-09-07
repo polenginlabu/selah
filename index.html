@@ -12,6 +12,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Selah" />
     <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" href="/SELAH_dark.png" />
     <title>Selah</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -29,9 +30,54 @@
         } catch (e) {}
       })();
     </script>
+    <style>
+      html,
+      body {
+        background: #f7faf6;
+      }
+
+      html.dark,
+      html.dark body {
+        background: #101613;
+      }
+
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: grid;
+        place-items: center;
+        background: #f7faf6;
+      }
+
+      .dark #boot-splash {
+        background: #101613;
+      }
+
+      #boot-splash img {
+        width: 9rem;
+        height: auto;
+      }
+
+      #boot-splash .dark-logo {
+        display: none;
+      }
+
+      .dark #boot-splash .light-logo {
+        display: none;
+      }
+
+      .dark #boot-splash .dark-logo {
+        display: block;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>
+    <div id="boot-splash" aria-label="Loading Selah">
+      <img class="light-logo" src="/SELAH_dark.png" alt="Selah" />
+      <img class="dark-logo" src="/SELAH_light.png" alt="Selah" />
+    </div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

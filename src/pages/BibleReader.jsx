@@ -272,7 +272,7 @@ export default function BibleReader() {
         <button onClick={() => changeChapter(-1)} className="btn-ghost p-2.5" aria-label="Previous chapter">
           <ChevronLeftIcon />
         </button>
-        <h2 className="font-serif text-2xl font-semibold tracking-tight">
+        <h2 className="font-sans text-2xl font-semibold tracking-tight">
           {book} {chapter}
         </h2>
         <button onClick={() => changeChapter(1)} className="btn-ghost p-2.5" aria-label="Next chapter">
@@ -286,7 +286,7 @@ export default function BibleReader() {
       )}
       {error && <p className="mt-8 text-center text-sm text-red-500">{error}</p>}
       {chapterData && !loading && (
-        <article className="mt-5 animate-fade-in font-serif text-[1.2rem] leading-loose text-ink">
+        <article className="mt-5 animate-fade-in font-sans text-[1.2rem] leading-loose text-ink">
           {chapterData.verses.map((verse) => (
             <span
               onClick={() => toggleVerse(verse.verse)}
