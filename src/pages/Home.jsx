@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { useToast } from '../context/ToastContext'
 import { subscribeToUserStats } from '../data/userStats'
 import { DEVOTION_METHOD_LABELS, getDevotionMeta, getDevotionsByDate, subscribeToDevotions } from '../data/devotions'
 import { getVerseOfTheDay } from '../data/votd'
+import { getMeditationSettings, setMeditationFocusWord, setMeditationPreferences } from '../data/meditation'
+import { enableNotifications } from '../lib/firebase'
 import { currentStreak, formatDateLong, formatDateShort, formatMonthYear, lastNDays, todayISO, weekdayLetter } from '../lib/date'
 import { getLevelProgress, getTribeForLevel } from '../lib/gamification'
-import { CheckIcon, ChevronDownIcon, PlusIcon, SearchIcon, SunIcon, XIcon, BookIcon, SproutIcon } from '../icons'
+import { CheckIcon, ChevronDownIcon, PlusIcon, SearchIcon, SunIcon, XIcon, BookIcon, SproutIcon, BellIcon } from '../icons'
 import { TRIBE_ICONS } from '../tribeIcons'
 
 const PAGE_SIZE = 20
@@ -148,6 +151,8 @@ export function Home() {
 
       {verse && <VerseOfTheDayCard verse={verse} doneToday={doneToday} />}
 
+      {user && <MeditateCard uid={user.id} />}
+
       {lastYearEntry && !isFiltering && (
         <Link
           to={`/devotion/${lastYearEntry.id}`}
@@ -274,6 +279,155 @@ function VerseOfTheDayCard({ verse, doneToday }) {
           </Link>
         )}
       </div>
+    </section>
+  )
+}
+
+function MeditateCard({ uid }) {
+  const toast = useToast()
+  const [settings, setSettings] = useState(null)
+  const [wordDraft, setWordDraft] = useState('')
+  const [editingWord, setEditingWord] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    getMeditationSettings(uid)
+      .then((loaded) => {
+        setSettings(loaded)
+        setWordDraft(loaded.focusWord)
+      })
+      .catch((err) => console.error('Failed to load meditation settings:', err))
+  }, [uid])
+
+  const saveWord = async () => {
+    const trimmed = wordDraft.trim()
+    if (!trimmed) return
+    setSaving(true)
+    try {
+      await setMeditationFocusWord(uid, trimmed)
+      setSettings((prev) => ({ ...prev, focusWord: trimmed }))
+      setEditingWord(false)
+      toast.success("Set — we'll remind you today.")
+    } catch (err) {
+      console.error('Failed to save focus word:', err)
+      toast.error('Something went wrong saving your word — please try again.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const toggleEnabled = async () => {
+    const next = !settings.enabled
+    setBusy(true)
+    try {
+      if (next) {
+        const permission = await enableNotifications(uid)
+        if (permission !== 'granted') {
+          toast.error(
+            permission === 'denied'
+              ? 'Notifications are blocked — enable them for this site in your browser settings.'
+              : "Notifications aren't supported on this device."
+          )
+          return
+        }
+      }
+      await setMeditationPreferences(uid, { enabled: next, frequencyHours: settings.frequencyHours })
+      setSettings((prev) => ({ ...prev, enabled: next }))
+    } catch (err) {
+      console.error('Failed to update meditation settings:', err)
+      toast.error('Something went wrong — please try again.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const setFrequency = async (hours) => {
+    if (hours === settings.frequencyHours) return
+    const prevHours = settings.frequencyHours
+    setSettings((prev) => ({ ...prev, frequencyHours: hours }))
+    try {
+      await setMeditationPreferences(uid, { enabled: settings.enabled, frequencyHours: hours })
+    } catch (err) {
+      console.error('Failed to update meditation frequency:', err)
+      setSettings((prev) => ({ ...prev, frequencyHours: prevHours }))
+      toast.error('Something went wrong — please try again.')
+    }
+  }
+
+  if (!settings) return null
+
+  return (
+    <section
+      aria-label="Meditate"
+      className="animate-rise rounded-2xl border border-brand/25 bg-brand-wash p-5 shadow-soft"
+    >
+      <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.08em] text-brand-strong dark:text-brand">
+        <SproutIcon width={14} height={14} /> Meditate
+      </p>
+      {settings.focusWord && !editingWord ? (
+        <>
+          <p className="mt-3 font-sans text-lg font-semibold italic text-ink">"{settings.focusWord}"</p>
+          <p className="mt-1 text-sm text-muted">
+            {settings.enabled
+              ? `Reminding you every ${settings.frequencyHours === 1 ? 'hour' : '4 hours'} today, 7am–9pm.`
+              : 'Reminders are off.'}
+          </p>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => {
+                setWordDraft(settings.focusWord)
+                setEditingWord(true)
+              }}
+              className="btn-ghost px-3 py-1.5 text-sm"
+            >
+              Change word
+            </button>
+            <button
+              onClick={toggleEnabled}
+              disabled={busy}
+              className={`px-3 py-1.5 text-sm disabled:opacity-50 ${settings.enabled ? 'btn-outline' : 'btn-primary'}`}
+            >
+              <BellIcon width={14} height={14} />
+              {busy ? 'Updating…' : settings.enabled ? 'Turn off reminders' : 'Remind me'}
+            </button>
+            {settings.enabled && (
+              <div className="ml-auto flex overflow-hidden rounded-lg border border-line text-xs font-semibold">
+                <button
+                  onClick={() => setFrequency(1)}
+                  className={`px-2.5 py-1.5 transition-colors ${settings.frequencyHours === 1 ? 'bg-brand text-on-brand' : 'text-muted hover:text-ink'}`}
+                >
+                  Hourly
+                </button>
+                <button
+                  onClick={() => setFrequency(4)}
+                  className={`px-2.5 py-1.5 transition-colors ${settings.frequencyHours === 4 ? 'bg-brand text-on-brand' : 'text-muted hover:text-ink'}`}
+                >
+                  Every 4h
+                </button>
+              </div>
+            )}
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="mt-3 text-sm text-ink">What is God speaking to you today? Pick one word to carry with you.</p>
+          <div className="mt-3 flex gap-2">
+            <input
+              value={wordDraft}
+              onChange={(e) => setWordDraft(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && saveWord()}
+              placeholder="e.g. Faithful, Peace, Rest…"
+              maxLength={40}
+              autoFocus={editingWord}
+              className="input flex-1"
+            />
+            <button onClick={saveWord} disabled={saving || !wordDraft.trim()} className="btn-primary px-4 disabled:opacity-50">
+              Set
+            </button>
+          </div>
+        </>
+      )}
     </section>
   )
 }
