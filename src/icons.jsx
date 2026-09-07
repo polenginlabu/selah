@@ -266,6 +266,22 @@ export const LockIcon = (props) => (
   </svg>
 )
 
+export const DownloadIcon = (props) => (
+  <svg {...ICON_PROPS} {...props}>
+    <path d="M12 3v12" />
+    <path d="M7 10l5 5 5-5" />
+    <path d="M4 19h16" />
+  </svg>
+)
+
+export const ShareIcon = (props) => (
+  <svg {...ICON_PROPS} {...props}>
+    <path d="M12 15V3" />
+    <path d="M8 7l4-4 4 4" />
+    <path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7" />
+  </svg>
+)
+
 export const GoogleIcon = (props) => (
   <svg width={18} height={18} viewBox="0 0 24 24" {...props}>
     <path

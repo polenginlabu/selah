@@ -1,9 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
 import { disableNotifications, enableNotifications, onForegroundMessage, sendTestConquestReminder } from '../lib/firebase'
-import { BellIcon, FlagIcon, LogOutIcon, MoonIcon, PencilIcon, SproutIcon, SunIcon, TrophyIcon } from '../icons'
+import { usePwaInstall } from '../lib/pwaInstall'
+import {
+  BellIcon,
+  DownloadIcon,
+  FlagIcon,
+  LogOutIcon,
+  MoonIcon,
+  PencilIcon,
+  ShareIcon,
+  SproutIcon,
+  SunIcon,
+  TrophyIcon,
+  XIcon,
+} from '../icons'
 
 const DEVELOPER_EMAIL = 'johnpaul.dj21@gmail.com'
 
@@ -11,6 +25,8 @@ export function Layout() {
   const { user, logout } = useAuth()
   const { theme, toggle } = useTheme()
   const location = useLocation()
+  const { canInstall, canPrompt, isIos, promptInstall } = usePwaInstall()
+  const [showIosInstall, setShowIosInstall] = useState(false)
 
   useEffect(() => {
     let unsubscribe
@@ -22,6 +38,11 @@ export function Layout() {
     return () => unsubscribe?.()
   }, [])
 
+  const handleInstallClick = () => {
+    if (canPrompt) promptInstall()
+    else if (isIos) setShowIosInstall(true)
+  }
+
   return (
     <div className="mx-auto flex min-h-screen max-w-xl flex-col">
       <header className="sticky top-0 z-sticky border-b border-line/70 bg-canvas/70 backdrop-blur-xl">
@@ -31,6 +52,11 @@ export function Layout() {
             <img src="/SELAH_light.png" alt="Selah" className="hidden h-7 w-auto dark:block" />
           </Link>
           <div className="flex items-center gap-1">
+            {canInstall && (
+              <button onClick={handleInstallClick} className="btn-ghost p-2" aria-label="Install Selah app">
+                <DownloadIcon width={18} height={18} />
+              </button>
+            )}
             <button
               onClick={toggle}
               className="btn-ghost p-2"
@@ -63,7 +89,68 @@ export function Layout() {
           </div>
         </nav>
       </div>
+
+      {showIosInstall && <IosInstallSheet onClose={() => setShowIosInstall(false)} />}
     </div>
+  )
+}
+
+function IosInstallSheet({ onClose }) {
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
+  return createPortal(
+    <>
+      <div
+        className="animate-fade-in fixed inset-0 z-modal-backdrop bg-black/50 backdrop-blur-sm"
+        style={{ animationDuration: '200ms' }}
+        onClick={onClose}
+      />
+      <div className="animate-sheet-up fixed inset-x-0 bottom-0 z-modal mx-auto max-w-xl rounded-t-3xl border-t border-line bg-surface shadow-lift">
+        <div className="flex justify-center pt-3">
+          <div className="h-1 w-10 rounded-full bg-line" />
+        </div>
+        <div className="space-y-4 px-5 pb-[calc(1.5rem+env(safe-area-inset-bottom))] pt-3">
+          <div className="flex items-center justify-between">
+            <h3 className="font-sans text-base font-semibold tracking-tight">Install Selah</h3>
+            <button
+              onClick={onClose}
+              aria-label="Close"
+              className="flex h-7 w-7 items-center justify-center rounded-full bg-raised text-muted"
+            >
+              <XIcon width={13} height={13} />
+            </button>
+          </div>
+          <ol className="space-y-3 text-sm text-ink">
+            <li className="flex items-center gap-3">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-wash text-brand-strong dark:text-brand">
+                <ShareIcon width={16} height={16} />
+              </span>
+              <span>
+                Tap the <span className="font-semibold">Share</span> button in Safari's toolbar.
+              </span>
+            </li>
+            <li className="flex items-center gap-3">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-wash text-brand-strong dark:text-brand">
+                <DownloadIcon width={16} height={16} />
+              </span>
+              <span>
+                Scroll down and choose <span className="font-semibold">Add to Home Screen</span>.
+              </span>
+            </li>
+          </ol>
+          <button onClick={onClose} className="btn-primary w-full">
+            Got it
+          </button>
+        </div>
+      </div>
+    </>,
+    document.body
   )
 }
 

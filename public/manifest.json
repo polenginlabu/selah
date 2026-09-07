@@ -1,9 +1,16 @@
 {
   "name": "Selah",
   "short_name": "Selah",
+  "description": "Read the Word, highlight what speaks to you, and journal your devotions.",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#f7faf6",
   "theme_color": "#f7faf6",
-  "icons": []
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
 }
