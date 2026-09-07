@@ -11,6 +11,12 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      HOSTINGER_HOST: ${{ secrets.HOSTINGER_HOST }}
+      HOSTINGER_PORT: ${{ secrets.HOSTINGER_PORT }}
+      HOSTINGER_USER: ${{ secrets.HOSTINGER_USER }}
+      HOSTINGER_DEPLOY_PATH: ${{ secrets.HOSTINGER_DEPLOY_PATH }}
+      HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY || secrets.HOSTINGER_SSH_PRIVATE_KEY || secrets.SSH_PRIVATE_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,19 +33,32 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Check deploy secrets
+        id: deploy_secrets
+        run: |
+          if [ -z "${HOSTINGER_SSH_KEY}" ] || [ -z "${HOSTINGER_HOST}" ] || [ -z "${HOSTINGER_PORT}" ] || [ -z "${HOSTINGER_USER}" ] || [ -z "${HOSTINGER_DEPLOY_PATH}" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Deploy secrets are not fully configured. Skipping Hostinger deployment steps."
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up SSH agent
+        if: steps.deploy_secrets.outputs.enabled == 'true'
         uses: webfactory/ssh-agent@v0.9.0
         with:
-          ssh-private-key: ${{ secrets.HOSTINGER_SSH_KEY }}
+          ssh-private-key: ${{ env.HOSTINGER_SSH_KEY }}
 
       - name: Trust the server's host key
+        if: steps.deploy_secrets.outputs.enabled == 'true'
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -p "${{ secrets.HOSTINGER_PORT }}" "${{ secrets.HOSTINGER_HOST }}" >> ~/.ssh/known_hosts
+          ssh-keyscan -p "${HOSTINGER_PORT}" "${HOSTINGER_HOST}" >> ~/.ssh/known_hosts
 
       - name: Sync build to Hostinger
+        if: steps.deploy_secrets.outputs.enabled == 'true'
         run: |
           rsync -avz --delete \
-            -e "ssh -p ${{ secrets.HOSTINGER_PORT }}" \
+            -e "ssh -p ${HOSTINGER_PORT}" \
             --exclude '.well-known' \
-            dist/ "${{ secrets.HOSTINGER_USER }}@${{ secrets.HOSTINGER_HOST }}:${{ secrets.HOSTINGER_DEPLOY_PATH }}/"
+            dist/ "${HOSTINGER_USER}@${HOSTINGER_HOST}:${HOSTINGER_DEPLOY_PATH}/"
