@@ -42,6 +42,24 @@ body {
   @apply bg-canvas text-ink font-sans;
 }
 
+/* iOS Safari gives native date/time inputs their own chrome that ignores
+   the padding/font-size box model our other inputs share, so they render
+   at a different height/width even with identical classes. Stripping the
+   native appearance makes them obey the same box model. min-width: 0
+   also stops their intrinsic content width from fighting w-full in a
+   grid/flex row. Pinning color-scheme to light sidesteps a separate iOS
+   bug where a dark color-scheme breaks the native picker's layout. */
+input[type='date'],
+input[type='time'],
+input[type='datetime-local'],
+input[type='month'],
+input[type='week'] {
+  -webkit-appearance: none;
+  appearance: none;
+  min-width: 0;
+  color-scheme: light;
+}
+
 .devotion-page {
   --brand: 0.25 0.055 258;
   --brand-strong: 0.25 0.055 258;
