@@ -10,6 +10,8 @@ export default {
       zIndex: {
         dropdown: '20',
         sticky: '30',
+        'modal-backdrop': '40',
+        modal: '50',
         toast: '60',
       },
       boxShadow: {
@@ -19,15 +21,31 @@ export default {
       },
       transitionTimingFunction: {
         'out-expo': 'cubic-bezier(0.16, 1, 0.3, 1)',
+        drawer: 'cubic-bezier(0.32, 0.72, 0, 1)',
       },
       keyframes: {
         rise: {
           from: { opacity: '0', transform: 'translateY(6px)' },
           to: { opacity: '1', transform: 'translateY(0)' },
         },
+        fadeIn: {
+          from: { opacity: '0' },
+          to: { opacity: '1' },
+        },
+        sheetUp: {
+          from: { transform: 'translateY(100%)' },
+          to: { transform: 'translateY(0)' },
+        },
+        fadeOut: {
+          from: { opacity: '1', transform: 'scale(1)' },
+          to: { opacity: '0', transform: 'scale(0.96)' },
+        },
       },
       animation: {
         rise: 'rise 0.5s cubic-bezier(0.16, 1, 0.3, 1) both',
+        'fade-in': 'fadeIn 200ms ease-out both',
+        'sheet-up': 'sheetUp 320ms cubic-bezier(0.32, 0.72, 0, 1) both',
+        'toast-out': 'fadeOut 180ms ease-in both',
       },
       colors: {
         canvas: 'oklch(var(--canvas) / <alpha-value>)',

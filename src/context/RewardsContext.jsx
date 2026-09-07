@@ -29,13 +29,23 @@ function randomEncouragement() {
   return ENCOURAGEMENTS[Math.floor(Math.random() * ENCOURAGEMENTS.length)]
 }
 
+const EXIT_DURATION = 180
+
 export function RewardsProvider({ children }) {
   const [toasts, setToasts] = useState([])
   const nextId = useRef(0)
 
-  const dismiss = useCallback((id) => {
+  const remove = useCallback((id) => {
     setToasts((toasts) => toasts.filter((toast) => toast.id !== id))
   }, [])
+
+  const dismiss = useCallback(
+    (id) => {
+      setToasts((toasts) => toasts.map((toast) => (toast.id === id ? { ...toast, leaving: true } : toast)))
+      window.setTimeout(() => remove(id), EXIT_DURATION)
+    },
+    [remove]
+  )
 
   const showReward = useCallback(
     (reward) => {
@@ -81,8 +91,10 @@ export function RewardsProvider({ children }) {
           <button
             key={toast.id}
             onClick={() => dismiss(toast.id)}
-            className="animate-rise pointer-events-auto flex w-full items-center gap-3 rounded-2xl border border-line bg-surface/95 px-4 py-3 text-left shadow-lift backdrop-blur"
-            style={{ animationDuration: '300ms' }}
+            className={`pointer-events-auto flex w-full items-center gap-3 rounded-2xl border border-line bg-surface/95 px-4 py-3 text-left shadow-lift backdrop-blur ${
+              toast.leaving ? 'animate-toast-out' : 'animate-rise'
+            }`}
+            style={{ animationDuration: toast.leaving ? undefined : '300ms' }}
           >
             <span className="text-2xl" aria-hidden="true">
               {toast.icon}

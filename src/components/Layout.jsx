@@ -131,7 +131,7 @@ function AccountMenu({ user, onSignOut }) {
       {open && (
         <div
           role="menu"
-          className="animate-rise absolute right-0 z-dropdown mt-2 w-56 overflow-hidden rounded-xl border border-line bg-surface shadow-lift"
+          className="animate-rise origin-top-right absolute right-0 z-dropdown mt-2 w-56 overflow-hidden rounded-xl border border-line bg-surface shadow-lift"
           style={{ animationDuration: '160ms' }}
         >
           {(user?.user_metadata?.full_name || user?.email) && (

@@ -9,13 +9,23 @@ const VARIANTS = {
   info: { icon: BellIcon, iconClass: 'bg-brand-wash text-brand-strong dark:text-brand', duration: 4200 },
 }
 
+const EXIT_DURATION = 180
+
 export function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([])
   const nextId = useRef(0)
 
-  const dismiss = useCallback((id) => {
+  const remove = useCallback((id) => {
     setToasts((toasts) => toasts.filter((toast) => toast.id !== id))
   }, [])
+
+  const dismiss = useCallback(
+    (id) => {
+      setToasts((toasts) => toasts.map((toast) => (toast.id === id ? { ...toast, leaving: true } : toast)))
+      window.setTimeout(() => remove(id), EXIT_DURATION)
+    },
+    [remove]
+  )
 
   const push = useCallback(
     (variant, message) => {
@@ -45,8 +55,10 @@ export function ToastProvider({ children }) {
             <button
               key={item.id}
               onClick={() => dismiss(item.id)}
-              className="animate-rise pointer-events-auto flex items-center gap-3 rounded-2xl border border-line bg-surface/95 px-4 py-3 text-left shadow-lift backdrop-blur"
-              style={{ animationDuration: '300ms' }}
+              className={`pointer-events-auto flex items-center gap-3 rounded-2xl border border-line bg-surface/95 px-4 py-3 text-left shadow-lift backdrop-blur ${
+                item.leaving ? 'animate-toast-out' : 'animate-rise'
+              }`}
+              style={{ animationDuration: item.leaving ? undefined : '300ms' }}
             >
               <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${iconClass}`}>
                 <Icon width={16} height={16} />

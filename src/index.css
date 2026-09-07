@@ -57,22 +57,22 @@ body {
 
 @layer components {
   .btn-primary {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-150 bg-brand-strong text-on-brand shadow-[0_1px_2px_oklch(var(--ink)/0.04),0_4px_16px_-6px_oklch(var(--ink)/0.1)];
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-[transform,background-color,box-shadow] duration-150 ease-out active:scale-[0.97] bg-brand-strong text-on-brand shadow-[0_1px_2px_oklch(var(--ink)/0.04),0_4px_16px_-6px_oklch(var(--ink)/0.1)];
   }
   .btn-ghost {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-150 text-muted;
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-[transform,background-color,color] duration-150 ease-out active:scale-[0.97] text-muted;
   }
   .btn-outline {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-150 border border-line bg-surface text-ink;
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-[transform,background-color,border-color] duration-150 ease-out active:scale-[0.97] border border-line bg-surface text-ink;
   }
   .btn-accent {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-150 bg-accent text-on-accent shadow-[0_1px_2px_oklch(var(--ink)/0.04),0_4px_16px_-6px_oklch(var(--ink)/0.1)];
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-[transform,background-color,box-shadow] duration-150 ease-out active:scale-[0.97] bg-accent text-on-accent shadow-[0_1px_2px_oklch(var(--ink)/0.04),0_4px_16px_-6px_oklch(var(--ink)/0.1)];
   }
   .card {
     @apply rounded-2xl border border-line bg-surface p-5 shadow-soft;
   }
   .card-link {
-    @apply card block transition-all duration-200 ease-out-expo hover:-translate-y-0.5 hover:border-brand/40 hover:shadow-lift;
+    @apply card block transition-[transform,border-color,box-shadow] duration-200 ease-out-expo hover:-translate-y-0.5 hover:border-brand/40 hover:shadow-lift active:scale-[0.98] active:duration-100;
   }
   .chip {
     @apply inline-flex items-center gap-1 rounded-full bg-raised px-2.5 py-0.5 text-xs font-medium text-muted;

@@ -509,7 +509,7 @@ function TagFilter({ tags, selected, onSelect }) {
         <div
           role="listbox"
           aria-label="Tags"
-          className="animate-rise absolute left-0 right-0 z-dropdown mt-1.5 overflow-hidden rounded-xl border border-line bg-surface shadow-lift"
+          className="animate-rise origin-top absolute left-0 right-0 z-dropdown mt-1.5 overflow-hidden rounded-xl border border-line bg-surface shadow-lift"
           style={{ animationDuration: '160ms' }}
         >
           <div className="border-b border-line p-2">
