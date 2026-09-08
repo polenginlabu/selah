@@ -108,6 +108,18 @@ export async function updateDiscipleNotes(id, notes) {
   if (error) throw error
 }
 
+export async function updateDiscipleDetails(id, details) {
+  const { error } = await supabase
+    .from('disciples')
+    .update({
+      name: details.name,
+      birthday: details.birthday || null,
+      mobile_number: details.mobileNumber || null,
+    })
+    .eq('id', id)
+  if (error) throw error
+}
+
 export async function linkDiscipleToProfile(id, profile) {
   const { error } = await supabase
     .from('disciples')

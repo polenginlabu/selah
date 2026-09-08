@@ -16,6 +16,7 @@ import {
   PlusIcon,
   FlagIcon,
   PhoneIcon,
+  PencilIcon,
   XIcon,
   TrashIcon,
   BranchIcon,
@@ -30,6 +31,7 @@ import {
   moveDisciple,
   updateDiscipleGeneration,
   updateDiscipleNotes,
+  updateDiscipleDetails,
   linkDiscipleToProfile,
   unlinkDisciple,
   updateLifetimePhase,
@@ -161,6 +163,7 @@ export default function DiscipleTree() {
   const [loading, setLoading] = useState(true)
   const [selectedId, setSelectedId] = useState(null)
   const [addModal, setAddModal] = useState({ open: false, mentorId: '' })
+  const [editDetailsId, setEditDetailsId] = useState(null)
   const [linkTargetId, setLinkTargetId] = useState(null)
   const [moveTargetId, setMoveTargetId] = useState(null)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -271,6 +274,33 @@ export default function DiscipleTree() {
       console.error('Failed to update notes:', err)
     }
   }, [])
+
+  const handleUpdateDetails = useCallback(
+    async (id, details) => {
+      try {
+        await updateDiscipleDetails(id, details)
+        setPeople((prev) => {
+          const person = prev[id]
+          return person
+            ? {
+                ...prev,
+                [id]: {
+                  ...person,
+                  name: details.name,
+                  birthday: details.birthday || undefined,
+                  mobileNumber: details.mobileNumber || undefined,
+                },
+              }
+            : prev
+        })
+        toast.success('Details updated.')
+      } catch (err) {
+        console.error('Failed to update details:', err)
+        toast.error('Something went wrong updating details — please try again.')
+      }
+    },
+    [toast]
+  )
 
   const handleRemoveDisciple = useCallback(
     async (id) => {
@@ -577,9 +607,20 @@ export default function DiscipleTree() {
             onLinkMember={(id) => setLinkTargetId(id)}
             onMove={(id) => setMoveTargetId(id)}
             onUpdateNotes={handleUpdateNotes}
+            onEditDetails={(id) => setEditDetailsId(id)}
             onRemove={handleRemoveDisciple}
             onUnlink={handleUnlinkDisciple}
             onUpdatePhase={handleUpdatePhase}
+          />,
+          document.body
+        )}
+      {editDetailsId &&
+        people[editDetailsId] &&
+        createPortal(
+          <EditDetailsModal
+            person={people[editDetailsId]}
+            onSave={handleUpdateDetails}
+            onClose={() => setEditDetailsId(null)}
           />,
           document.body
         )}
@@ -767,6 +808,7 @@ function PersonDetailSheet({
   onLinkMember,
   onMove,
   onUpdateNotes,
+  onEditDetails,
   onRemove,
   onUnlink,
   onUpdatePhase,
@@ -844,6 +886,15 @@ function PersonDetailSheet({
                   </p>
                 )}
               </div>
+              {!isRoot && !person.isForeignBranch && (
+                <button
+                  onClick={() => onEditDetails(person.id)}
+                  aria-label="Edit details"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-raised text-muted transition-colors active:scale-95"
+                >
+                  <PencilIcon width={14} height={14} />
+                </button>
+              )}
               <button
                 onClick={onClose}
                 className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-raised text-muted"
@@ -1076,6 +1127,77 @@ function PersonDetailSheet({
             </>
           )}
         </div>
+      </div>
+    </div>
+  )
+}
+
+function EditDetailsModal({ person, onSave, onClose }) {
+  const [name, setName] = useState(person.name)
+  const [mobileNumber, setMobileNumber] = useState(person.mobileNumber ?? '')
+  const [birthday, setBirthday] = useState(person.birthday ?? '')
+
+  const handleSubmit = (e) => {
+    e.preventDefault()
+    if (!name.trim()) return
+    onSave(person.id, { name: name.trim(), mobileNumber: mobileNumber.trim(), birthday })
+    onClose()
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col justify-end">
+      <div
+        className="animate-fade-in absolute inset-0 bg-black/50 backdrop-blur-sm"
+        style={{ animationDuration: '200ms' }}
+        onClick={onClose}
+      />
+      <div className="animate-sheet-up card relative rounded-b-none rounded-t-3xl border-b-0 p-0 shadow-2xl">
+        <div className="flex justify-center pt-3">
+          <div className="h-1 w-10 rounded-full bg-line" />
+        </div>
+        <form onSubmit={handleSubmit} className="space-y-4 px-5 pb-[calc(1.5rem+env(safe-area-inset-bottom))] pt-3">
+          <div className="flex items-center justify-between">
+            <h3 className="font-sans text-base font-semibold tracking-tight">Edit Details</h3>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="flex h-7 w-7 items-center justify-center rounded-full bg-raised text-muted"
+            >
+              <XIcon width={13} height={13} />
+            </button>
+          </div>
+          <div>
+            <label className="mb-2 block text-sm font-semibold text-ink">Full Name *</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              autoFocus={true}
+              required={true}
+              className="input"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-2 block text-sm font-semibold text-ink">Mobile Number</label>
+              <input
+                type="tel"
+                value={mobileNumber}
+                onChange={(e) => setMobileNumber(e.target.value)}
+                placeholder="Optional"
+                className="input"
+              />
+            </div>
+            <div>
+              <label className="mb-2 block text-sm font-semibold text-ink">Birthday</label>
+              <input type="date" value={birthday} onChange={(e) => setBirthday(e.target.value)} className="input" />
+            </div>
+          </div>
+          <button type="submit" className="btn-accent w-full rounded-2xl py-4 text-base font-semibold active:scale-[0.98]">
+            Save Changes
+          </button>
+        </form>
       </div>
     </div>
   )
