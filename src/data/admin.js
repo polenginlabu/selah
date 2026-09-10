@@ -19,6 +19,7 @@ function mapUser(row) {
     avatarUrl: row.avatar_url,
     xp: row.xp ?? 0,
     level: row.level ?? 1,
+    discipleCount: row.disciple_count ?? 0,
     createdAt: row.created_at,
     lastSignInAt: row.last_sign_in_at,
     isAdmin: row.is_admin,
@@ -29,6 +30,23 @@ export async function listUsers() {
   const { data, error } = await supabase.rpc('admin_list_users')
   if (error) throw error
   return (data ?? []).map(mapUser)
+}
+
+/** One user's disciples, flat and ordered by generation. */
+export async function listDisciples(userId) {
+  const { data, error } = await supabase.rpc('admin_list_disciples', { target_id: userId })
+  if (error) throw error
+  return (data ?? []).map((row) => ({
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    mobileNumber: row.mobile_number,
+    generation: row.generation,
+    parentName: row.parent_name,
+    linkedUserId: row.linked_user_id,
+    lifetimePhase: row.lifetime_phase ?? 0,
+    createdAt: row.created_at,
+  }))
 }
 
 /** Zeroes one user's XP, achievements, streaks and counters. */

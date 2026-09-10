@@ -3,9 +3,24 @@ import { createPortal } from 'react-dom'
 import { Navigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
-import { SearchIcon, RefreshIcon, TrashIcon, UsersIcon, ZapIcon, LockIcon } from '../icons'
+import {
+  SearchIcon,
+  RefreshIcon,
+  TrashIcon,
+  UsersIcon,
+  ZapIcon,
+  LockIcon,
+  ChevronDownIcon,
+} from '../icons'
 import { formatDateShort } from '../lib/date'
-import { isAdminEmail, listUsers, resetUserProgress, resetAllProgress, deleteUser } from '../data/admin'
+import {
+  isAdminEmail,
+  listUsers,
+  listDisciples,
+  resetUserProgress,
+  resetAllProgress,
+  deleteUser,
+} from '../data/admin'
 
 function shortDate(timestamp) {
   return timestamp ? formatDateShort(timestamp.slice(0, 10)) : '—'
@@ -63,6 +78,69 @@ function ConfirmDialog({ title, body, confirmLabel, confirmPhrase, busy, onCance
   )
 }
 
+/**
+ * One user's disciples, fetched on first expand and then cached — the admin
+ * list can be long and most rows are never opened, so loading every tree up
+ * front would be a lot of queries for nothing.
+ */
+function DisciplePanel({ userId }) {
+  const [disciples, setDisciples] = useState(null)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    listDisciples(userId)
+      .then((rows) => {
+        if (!cancelled) setDisciples(rows)
+      })
+      .catch((err) => {
+        console.error('Failed to load disciples:', err)
+        if (!cancelled) setError(err.message ?? 'Could not load disciples.')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [userId])
+
+  if (error) return <p className="px-3 py-2 text-xs text-red-500">{error}</p>
+  if (!disciples) {
+    return (
+      <div className="flex justify-center py-3">
+        <span className="h-4 w-4 animate-spin rounded-full border-2 border-line border-t-brand" />
+      </div>
+    )
+  }
+  if (disciples.length === 0) {
+    return <p className="px-3 py-2 text-xs italic text-muted">No disciples yet.</p>
+  }
+
+  return (
+    <ul className="space-y-1.5">
+      {disciples.map((d) => (
+        <li
+          key={d.id}
+          className="flex items-center gap-2 rounded-lg bg-canvas px-2.5 py-2"
+          // Indent by generation so the shape of the tree is readable in a
+          // flat list. Capped so deep trees stay on screen.
+          style={{ marginLeft: `${Math.min(d.generation - 1, 4) * 12}px` }}
+        >
+          <span className="chip shrink-0 !px-1.5 tabular-nums">G{d.generation}</span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-xs font-semibold text-ink">{d.name}</span>
+            <span className="block truncate text-[0.65rem] text-muted">
+              {d.parentName ? `Under ${d.parentName}` : 'Direct'}
+              {d.email ? ` · ${d.email}` : ''}
+              {d.mobileNumber ? ` · ${d.mobileNumber}` : ''}
+            </span>
+          </span>
+          {d.linkedUserId && <span className="chip-brand shrink-0">Member</span>}
+          {d.lifetimePhase > 0 && <span className="chip shrink-0 tabular-nums">P{d.lifetimePhase}</span>}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 function StatCard({ icon: Icon, value, label }) {
   return (
     <div className="rounded-xl border border-line p-3 text-center">
@@ -82,6 +160,7 @@ export default function Admin() {
   const [query, setQuery] = useState('')
   const [pending, setPending] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [expandedId, setExpandedId] = useState(null)
 
   const allowed = isAdminEmail(user?.email)
 
@@ -112,6 +191,7 @@ export default function Admin() {
 
   const totalXp = useMemo(() => users.reduce((sum, u) => sum + u.xp, 0), [users])
   const activeCount = useMemo(() => users.filter((u) => u.xp > 0).length, [users])
+  const totalDisciples = useMemo(() => users.reduce((sum, u) => sum + u.discipleCount, 0), [users])
 
   // The client guard is cosmetic — the RPCs enforce this server-side — but it
   // keeps a non-admin from seeing a broken page full of 403s.
@@ -167,8 +247,8 @@ export default function Admin() {
 
       <div className="grid grid-cols-3 gap-2">
         <StatCard icon={UsersIcon} value={users.length} label="Users" />
-        <StatCard icon={ZapIcon} value={activeCount} label="With XP" />
         <StatCard icon={ZapIcon} value={totalXp.toLocaleString()} label="Total XP" />
+        <StatCard icon={UsersIcon} value={totalDisciples} label="Disciples" />
       </div>
 
       <div className="relative">
@@ -239,7 +319,24 @@ export default function Admin() {
                     </div>
                   </div>
                   <div className="mt-2.5 flex items-center gap-2 pl-12">
-                    <p className="flex-1 text-[0.65rem] text-muted">
+                    <button
+                      onClick={() => setExpandedId(expandedId === u.id ? null : u.id)}
+                      disabled={u.discipleCount === 0}
+                      aria-expanded={expandedId === u.id}
+                      aria-label={`Show disciples of ${u.fullName || u.email}`}
+                      className="chip shrink-0 transition-colors hover:text-ink disabled:opacity-40"
+                    >
+                      <UsersIcon width={10} height={10} />
+                      <span className="tabular-nums">{u.discipleCount}</span>
+                      {u.discipleCount > 0 && (
+                        <ChevronDownIcon
+                          width={10}
+                          height={10}
+                          className={`transition-transform ${expandedId === u.id ? 'rotate-180' : ''}`}
+                        />
+                      )}
+                    </button>
+                    <p className="min-w-0 flex-1 truncate text-[0.65rem] text-muted">
                       Joined {shortDate(u.createdAt)} · Last seen {shortDate(u.lastSignInAt)}
                     </p>
                     <button
@@ -261,6 +358,11 @@ export default function Admin() {
                       <TrashIcon width={12} height={12} />
                     </button>
                   </div>
+                  {expandedId === u.id && (
+                    <div className="mt-2.5 pl-12">
+                      <DisciplePanel userId={u.id} />
+                    </div>
+                  )}
                 </div>
               ))
             )}
