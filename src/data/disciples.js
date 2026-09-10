@@ -26,16 +26,25 @@ export async function getDiscipleTree() {
   )
 }
 
-export async function getOrCreateRootDisciple(treeOwnerId, name) {
-  const { data: existing } = await supabase
+// Ordered so the same root wins on every load; without it Postgres may hand
+// back a different row each time and the tree appears to change shape.
+async function findRootDisciple(treeOwnerId) {
+  const { data, error } = await supabase
     .from('disciples')
     .select('id')
     .eq('tree_owner_id', treeOwnerId)
     .is('parent_id', null)
     .eq('generation', 0)
+    .order('created_at', { ascending: true })
     .limit(1)
-    .single()
-  if (existing) return existing.id
+    .maybeSingle()
+  if (error) throw error
+  return data?.id ?? null
+}
+
+export async function getOrCreateRootDisciple(treeOwnerId, name) {
+  const existingId = await findRootDisciple(treeOwnerId)
+  if (existingId) return existingId
 
   const { data, error } = await supabase
     .from('disciples')
@@ -48,7 +57,14 @@ export async function getOrCreateRootDisciple(treeOwnerId, name) {
     })
     .select('id')
     .single()
-  if (error) throw error
+
+  // A concurrent call can win the race: the disciples_one_root_per_owner index
+  // rejects this insert, and the row we wanted already exists.
+  if (error) {
+    const racedId = await findRootDisciple(treeOwnerId)
+    if (racedId) return racedId
+    throw error
+  }
   return data.id
 }
 

@@ -367,7 +367,13 @@ function MeditateCard({ uid }) {
       </p>
       {settings.focusWord && !editingWord ? (
         <>
-          <p className="mt-3 font-sans text-lg font-semibold italic text-ink">"{settings.focusWord}"</p>
+          <p
+            className={`mt-3 font-sans font-semibold italic text-ink ${
+              settings.focusWord.length > 32 ? 'text-base leading-snug' : 'text-lg'
+            }`}
+          >
+            "{settings.focusWord}"
+          </p>
           <p className="mt-1 text-sm text-muted">
             {settings.enabled
               ? `Reminding you every ${settings.frequencyHours === 1 ? 'hour' : '4 hours'} today, 7am–9pm.`
@@ -411,14 +417,16 @@ function MeditateCard({ uid }) {
         </>
       ) : (
         <>
-          <p className="mt-3 text-sm text-ink">What is God speaking to you today? Pick one word to carry with you.</p>
+          <p className="mt-3 text-sm text-ink">
+            What is God speaking to you today? Pick a word or short phrase to carry with you.
+          </p>
           <div className="mt-3 flex gap-2">
             <input
               value={wordDraft}
               onChange={(e) => setWordDraft(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && saveWord()}
-              placeholder="e.g. Faithful, Peace, Rest…"
-              maxLength={40}
+              placeholder="e.g. Faithful, Be still and know…"
+              maxLength={120}
               autoFocus={editingWord}
               className="input flex-1"
             />

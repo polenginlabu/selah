@@ -84,6 +84,20 @@ function countNetwork(id, people) {
     : person.discipleIds.reduce((sum, childId) => sum + 1 + countNetwork(childId, people), 0)
 }
 
+// Records can sit in the people map without hanging off the root — foreign
+// branches, or rows whose parent isn't in the returned set. Stats must count
+// only what the tree actually draws, or they disagree with it.
+function collectTreeIds(rootId, people) {
+  const ids = new Set()
+  const walk = (id) => {
+    if (!people[id] || ids.has(id)) return
+    ids.add(id)
+    for (const childId of people[id].discipleIds) walk(childId)
+  }
+  walk(rootId)
+  return ids
+}
+
 function getAncestorChain(id, people) {
   const chain = new Set()
   let current = id
@@ -678,8 +692,11 @@ export default function DiscipleTree() {
 function G12MultiplicationCard({ people, rootId }) {
   if (!rootId) return null
   const countsByGen = {}
-  for (const person of Object.values(people))
-    if (person.id !== rootId) countsByGen[person.generation] = (countsByGen[person.generation] ?? 0) + 1
+  for (const id of collectTreeIds(rootId, people)) {
+    if (id === rootId) continue
+    const { generation } = people[id]
+    countsByGen[generation] = (countsByGen[generation] ?? 0) + 1
+  }
   const maxGen = Math.max(0, ...Object.keys(countsByGen).map(Number))
   if (maxGen === 0 && !countsByGen[1]) return null
   const genStats = []
@@ -724,7 +741,8 @@ function G12MultiplicationCard({ people, rootId }) {
 const PHASE_COLORS = ['#9ca3af', '#E9CE38', '#5eead4', '#7c5cfc', '#E2775C']
 
 function ConquestPhasesCard({ people, rootId }) {
-  const disciples = Object.values(people).filter((p) => p.id !== rootId)
+  const treeIds = collectTreeIds(rootId, people)
+  const disciples = Object.values(people).filter((p) => p.id !== rootId && treeIds.has(p.id))
   if (disciples.length === 0) return null
   const phaseCounts = [0, 0, 0, 0, 0]
   for (const disciple of disciples) {
