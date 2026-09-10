@@ -619,10 +619,8 @@ export default function DiscipleTree() {
             onSelect={(id) => setSelectedId(id)}
             onAddDisciple={(id) => setAddModal({ open: true, mentorId: id })}
             onLinkMember={(id) => setLinkTargetId(id)}
-            onMove={(id) => setMoveTargetId(id)}
             onUpdateNotes={handleUpdateNotes}
             onEditDetails={(id) => setEditDetailsId(id)}
-            onRemove={handleRemoveDisciple}
             onUnlink={handleUnlinkDisciple}
             onUpdatePhase={handleUpdatePhase}
           />,
@@ -635,6 +633,16 @@ export default function DiscipleTree() {
             person={people[editDetailsId]}
             onSave={handleUpdateDetails}
             onClose={() => setEditDetailsId(null)}
+            // Both hand off to another surface, so close this sheet first
+            // rather than stacking a third layer over the detail sheet.
+            onMove={(id) => {
+              setEditDetailsId(null)
+              setMoveTargetId(id)
+            }}
+            onRemove={(id) => {
+              setEditDetailsId(null)
+              handleRemoveDisciple(id)
+            }}
           />,
           document.body
         )}
@@ -824,10 +832,8 @@ function PersonDetailSheet({
   onSelect,
   onAddDisciple,
   onLinkMember,
-  onMove,
   onUpdateNotes,
   onEditDetails,
-  onRemove,
   onUnlink,
   onUpdatePhase,
 }) {
@@ -837,13 +843,11 @@ function PersonDetailSheet({
   const [editingNotes, setEditingNotes] = useState(false)
   const [notesDraft, setNotesDraft] = useState(person.notes ?? '')
   const notesRef = useRef(null)
-  const [confirmingRemove, setConfirmingRemove] = useState(false)
   const [phaseMenuOpen, setPhaseMenuOpen] = useState(false)
 
   useEffect(() => {
     setNotesDraft(person.notes ?? '')
     setEditingNotes(false)
-    setConfirmingRemove(false)
   }, [person.id, person.notes])
 
   useEffect(() => {
@@ -1107,41 +1111,6 @@ function PersonDetailSheet({
                   Unlink Member
                 </button>
               )}
-              {!isRoot && (
-                <button
-                  onClick={() => onMove(person.id)}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl border border-line py-3 text-sm font-semibold text-ink transition-colors active:scale-[0.98] active:bg-raised"
-                >
-                  <BranchIcon width={14} height={14} className="text-muted" />
-                  Move to Different Leader
-                </button>
-              )}
-              {!isRoot &&
-                (confirmingRemove ? (
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => setConfirmingRemove(false)}
-                      className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-line py-3 text-sm font-semibold text-ink transition-colors active:scale-[0.98]"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={() => onRemove(person.id)}
-                      className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-red-500/15 py-3 text-sm font-semibold text-red-400 transition-colors active:scale-[0.98]"
-                    >
-                      <TrashIcon width={14} height={14} />
-                      Confirm
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => setConfirmingRemove(true)}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl border border-red-500/20 py-3 text-sm font-semibold text-red-400 transition-colors active:scale-[0.98] active:bg-red-500/10"
-                  >
-                    <TrashIcon width={14} height={14} />
-                    Remove
-                  </button>
-                ))}
             </>
           )}
         </div>
@@ -1150,10 +1119,11 @@ function PersonDetailSheet({
   )
 }
 
-function EditDetailsModal({ person, onSave, onClose }) {
+function EditDetailsModal({ person, onSave, onClose, onMove, onRemove }) {
   const [name, setName] = useState(person.name)
   const [mobileNumber, setMobileNumber] = useState(person.mobileNumber ?? '')
   const [birthday, setBirthday] = useState(person.birthday ?? '')
+  const [confirmingRemove, setConfirmingRemove] = useState(false)
 
   const handleSubmit = (e) => {
     e.preventDefault()
@@ -1196,25 +1166,73 @@ function EditDetailsModal({ person, onSave, onClose }) {
               className="input"
             />
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="mb-2 block text-sm font-semibold text-ink">Mobile Number</label>
-              <input
-                type="tel"
-                value={mobileNumber}
-                onChange={(e) => setMobileNumber(e.target.value)}
-                placeholder="Optional"
-                className="input"
-              />
-            </div>
-            <div>
-              <label className="mb-2 block text-sm font-semibold text-ink">Birthday</label>
-              <input type="date" value={birthday} onChange={(e) => setBirthday(e.target.value)} className="input" />
-            </div>
+          <div>
+            <label className="mb-2 block text-sm font-semibold text-ink">Mobile Number</label>
+            <input
+              type="tel"
+              value={mobileNumber}
+              onChange={(e) => setMobileNumber(e.target.value)}
+              placeholder="Optional"
+              className="input"
+            />
+          </div>
+          <div>
+            <label className="mb-2 block text-sm font-semibold text-ink">Birthday</label>
+            {/* Full width, not a half grid cell: a native date control has a
+                fixed intrinsic width (the mm/dd/yyyy segments plus the picker
+                icon) that it will not shrink below, so in a narrow column the
+                icon overflowed the rounded border. */}
+            <input
+              type="date"
+              value={birthday}
+              onChange={(e) => setBirthday(e.target.value)}
+              className="input block h-11 w-full"
+            />
           </div>
           <button type="submit" className="btn-accent w-full rounded-2xl py-4 text-base font-semibold active:scale-[0.98]">
             Save Changes
           </button>
+          {/* type="button" on every one of these: they sit inside the form, and
+              a bare <button> would default to submit and save on click. */}
+          <div className="space-y-2 border-t border-line pt-4">
+            <p className="eyebrow">Manage</p>
+            <button
+              type="button"
+              onClick={() => onMove(person.id)}
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-line py-3 text-sm font-semibold text-ink transition-colors active:scale-[0.98] active:bg-raised"
+            >
+              <BranchIcon width={14} height={14} className="text-muted" />
+              Move to Different Leader
+            </button>
+            {confirmingRemove ? (
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setConfirmingRemove(false)}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-line py-3 text-sm font-semibold text-ink transition-colors active:scale-[0.98]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onRemove(person.id)}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-red-500/15 py-3 text-sm font-semibold text-red-400 transition-colors active:scale-[0.98]"
+                >
+                  <TrashIcon width={14} height={14} />
+                  Confirm
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmingRemove(true)}
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-red-500/20 py-3 text-sm font-semibold text-red-400 transition-colors active:scale-[0.98] active:bg-red-500/10"
+              >
+                <TrashIcon width={14} height={14} />
+                Remove
+              </button>
+            )}
+          </div>
         </form>
       </div>
     </div>
