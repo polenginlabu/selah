@@ -5,7 +5,12 @@ import { ChevronLeftIcon, ChevronRightIcon, CheckIcon, XIcon } from '../icons'
 import { todayISO, addDays, formatMonthYear } from '../lib/date'
 import { withOpacity } from '../lib/gamification'
 import { getOrCreateRootDisciple, getDiscipleTree } from '../data/disciples'
-import { SERVICES, getRecentServices, getAttendanceForServiceRange } from '../data/attendance'
+import {
+  SERVICES,
+  SERVICE_DAY_OF_WEEK,
+  getRecentServices,
+  getAttendanceForServiceRange,
+} from '../data/attendance'
 
 function daysInMonth(monthStr) {
   const [year, month] = monthStr.split('-').map(Number)
@@ -20,6 +25,20 @@ function shiftMonth(monthStr, delta) {
 
 function pad2(n) {
   return String(n).padStart(2, '0')
+}
+
+// The date a service actually meets inside a week bucket, or null when the
+// bucket never contains that weekday — buckets are clipped to the month, so
+// the last one can be a stub (e.g. Sep 29-30) that no Sunday falls in.
+// Services added ad hoc have no fixed day, so they only settle once the
+// bucket is over.
+function serviceDateInBucket(service, bucket) {
+  const dayOfWeek = SERVICE_DAY_OF_WEEK[service]
+  if (dayOfWeek === undefined) return bucket.end
+  for (let date = bucket.start; date <= bucket.end; date = addDays(date, 1)) {
+    if (new Date(date + 'T00:00:00').getDay() === dayOfWeek) return date
+  }
+  return null
 }
 
 export default function Reports() {
@@ -95,17 +114,23 @@ export default function Reports() {
     today = todayISO(),
     weekStats = useMemo(
       () =>
-        weekBuckets.map((bucket, index) => ({
-          bucket,
-          present: recordsByWeek[index].filter((record) => record.present).length,
-          isFuture: bucket.start > today,
-        })),
-      [weekBuckets, recordsByWeek, today]
+        weekBuckets.map((bucket, index) => {
+          // A week only counts once its session has actually happened. Keying
+          // off bucket.start counted the current, half-finished week as a zero
+          // and halved every average the moment a new week began.
+          const serviceDate = serviceDateInBucket(selectedService, bucket)
+          return {
+            bucket,
+            present: recordsByWeek[index].filter((record) => record.present).length,
+            isPending: serviceDate === null || serviceDate > today,
+          }
+        }),
+      [weekBuckets, recordsByWeek, selectedService, today]
     ),
-    pastWeeks = weekStats.filter((week) => !week.isFuture),
-    avgPresent = pastWeeks.length ? pastWeeks.reduce((sum, week) => sum + week.present, 0) / pastWeeks.length : 0,
-    avgRatePercent = pastWeeks.length ? Math.round((avgPresent / discipleCountOrOne) * 100) : 0,
-    weeksLogged = pastWeeks.filter((week) => week.present > 0).length
+    heldWeeks = weekStats.filter((week) => !week.isPending),
+    avgPresent = heldWeeks.length ? heldWeeks.reduce((sum, week) => sum + week.present, 0) / heldWeeks.length : 0,
+    avgRatePercent = heldWeeks.length ? Math.round((avgPresent / discipleCountOrOne) * 100) : 0,
+    weeksLogged = heldWeeks.filter((week) => week.present > 0).length
 
   return loading ? (
     <div className="mt-10 flex justify-center">
@@ -198,14 +223,14 @@ export default function Reports() {
             </div>
             <div className="flex h-32 items-end gap-2">
               {weekStats.map((week, index) => {
-                const isLatestPastWeek = !week.isFuture && weekStats.slice(index + 1).every((w) => w.isFuture)
+                const isLatestHeldWeek = !week.isPending && weekStats.slice(index + 1).every((w) => w.isPending)
                 return (
                   <div className="flex h-full flex-1 items-end" key={week.bucket.start}>
-                    {week.isFuture ? (
+                    {week.isPending ? (
                       <div className="h-3 w-full rounded-md border border-dashed border-line opacity-40" />
                     ) : (
                       <div
-                        className={`w-full rounded-md ${isLatestPastWeek ? 'bg-accent' : 'bg-raised'}`}
+                        className={`w-full rounded-md ${isLatestHeldWeek ? 'bg-accent' : 'bg-raised'}`}
                         style={{
                           height: `${Math.max((week.present / discipleCountOrOne) * 100, 4)}%`,
                         }}
@@ -219,7 +244,7 @@ export default function Reports() {
             <div className="mt-1.5 flex gap-2">
               {weekStats.map((week) => (
                 <p
-                  className={`flex-1 text-center text-[0.6rem] ${week.isFuture ? 'text-muted/50' : 'text-muted'}`}
+                  className={`flex-1 text-center text-[0.6rem] ${week.isPending ? 'text-muted/50' : 'text-muted'}`}
                   key={week.bucket.start}
                 >
                   {week.bucket.label}
@@ -232,11 +257,11 @@ export default function Reports() {
             {visibleDisciples.map((disciple) => {
               const perWeekStatus = recordsByWeek.map((weekRecords, weekIndex) => ({
                   present: weekRecords.find((record) => record.discipleId === disciple.id)?.present ?? false,
-                  isFuture: weekStats[weekIndex].isFuture,
+                  isPending: weekStats[weekIndex].isPending,
                 })),
-                pastStatuses = perWeekStatus.filter((status) => !status.isFuture),
-                disciplePercent = pastStatuses.length
-                  ? Math.round((pastStatuses.filter((status) => status.present).length / pastStatuses.length) * 100)
+                heldStatuses = perWeekStatus.filter((status) => !status.isPending),
+                disciplePercent = heldStatuses.length
+                  ? Math.round((heldStatuses.filter((status) => status.present).length / heldStatuses.length) * 100)
                   : 0,
                 percentColor = disciplePercent >= 80 ? '#22c55e' : disciplePercent >= 60 ? '#eab308' : '#ef4444',
                 initials = disciple.name
@@ -258,7 +283,7 @@ export default function Reports() {
                   </div>
                   <div className="flex gap-1 pl-12">
                     {perWeekStatus.map((status, index) =>
-                      status.isFuture ? (
+                      status.isPending ? (
                         <span className="h-5 w-5 rounded-full border border-dashed border-line opacity-40" key={index} />
                       ) : (
                         <span

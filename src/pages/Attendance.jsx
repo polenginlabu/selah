@@ -375,14 +375,13 @@ export default function Attendance() {
                   onClick={() => cycleTier(disciple)}
                   title={`Tap to set: ${TIER_LABELS[nextTier(tier)]}`}
                   aria-label={`${disciple.name} is ${TIER_LABELS[tier]}, attended ${attendanceCount} times. Tap to change tier to ${TIER_LABELS[nextTier(tier)]}.`}
-                  className="flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-xs font-bold tabular-nums transition-transform active:scale-90"
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-transform active:scale-90"
                   style={{
                     backgroundColor: withOpacity(tierColor, 0.18),
                     color: tierColor,
                   }}
                 >
-                  <RefreshIcon width={10} height={10} strokeWidth={2.5} />
-                  {attendanceCount}×
+                  <RefreshIcon width={12} height={12} strokeWidth={2.5} />
                 </button>
                 <div className="flex shrink-0 gap-1.5">
                   <button
