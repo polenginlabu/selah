@@ -9,6 +9,7 @@ import {
   BellIcon,
   DownloadIcon,
   FlagIcon,
+  LockIcon,
   LogOutIcon,
   MoonIcon,
   PencilIcon,
@@ -19,8 +20,7 @@ import {
   XIcon,
 } from '../icons'
 import { Logo } from './Logo'
-
-const DEVELOPER_EMAIL = 'johnpaul.dj21@gmail.com'
+import { isAdminEmail } from '../data/admin'
 
 export function Layout() {
   const { user, logout } = useAuth()
@@ -230,6 +230,16 @@ function AccountMenu({ user, onSignOut }) {
             </div>
           )}
           {user && <NotificationSettings uid={user.id} email={user.email ?? null} />}
+          {isAdminEmail(user?.email) && (
+            <Link
+              role="menuitem"
+              to="/admin"
+              onClick={() => setOpen(false)}
+              className="flex w-full items-center gap-2.5 border-t border-line px-3.5 py-2.5 text-left text-sm text-ink transition-colors hover:bg-raised"
+            >
+              <LockIcon width={16} height={16} className="text-muted" /> Admin
+            </Link>
+          )}
           <button
             role="menuitem"
             onClick={() => {
@@ -308,7 +318,7 @@ function NotificationSettings({ uid, email }) {
         </button>
       )}
       {error && <p className="mt-1.5 text-xs text-red-500">{error}</p>}
-      {permission === 'granted' && email === DEVELOPER_EMAIL && (
+      {permission === 'granted' && isAdminEmail(email) && (
         <>
           <button
             role="menuitem"
