@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
-    <meta name="theme-color" content="#f7faf6" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#101613" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#F2F5FF" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#111418" media="(prefers-color-scheme: dark)" />
     <!-- iOS only supports Web Push for a site added to the Home Screen and
          opened from there (iOS 16.4+) — these make that a real standalone
          app instead of just a bookmarked Safari tab. -->
@@ -18,7 +18,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,100..900;1,100..900&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,100..900;1,100..900&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap"
       rel="stylesheet"
     />
     <script>
@@ -34,12 +34,12 @@
     <style>
       html,
       body {
-        background: #f7faf6;
+        background: #F2F5FF;
       }
 
       html.dark,
       html.dark body {
-        background: #101613;
+        background: #111418;
       }
 
       #boot-splash {
@@ -48,36 +48,67 @@
         z-index: 9999;
         display: grid;
         place-items: center;
-        background: #f7faf6;
+        background: #F2F5FF;
       }
 
       .dark #boot-splash {
-        background: #101613;
+        background: #111418;
       }
 
-      #boot-splash img {
-        width: 9rem;
-        height: auto;
+      #boot-splash .lockup {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
       }
 
-      #boot-splash .dark-logo {
-        display: none;
+      #boot-splash .wordmark {
+        font-family: 'Plus Jakarta Sans', Inter, system-ui, sans-serif;
+        font-weight: 800;
+        font-size: 2rem;
+        letter-spacing: -0.03em;
+        line-height: 1;
+        color: #0D1B36;
       }
 
-      .dark #boot-splash .light-logo {
-        display: none;
+      .dark #boot-splash .wordmark {
+        color: #ffffff;
       }
 
-      .dark #boot-splash .dark-logo {
-        display: block;
+      #boot-splash .wordmark span {
+        color: #4F6EF7;
+      }
+
+      .dark #boot-splash .wordmark span {
+        color: #7B93F9;
+      }
+
+      #boot-splash .bar-fg {
+        fill: #0D1B36;
+      }
+
+      .dark #boot-splash .bar-fg {
+        fill: #ffffff;
+      }
+
+      #boot-splash .bar-accent {
+        fill: #4F6EF7;
+      }
+
+      .dark #boot-splash .bar-accent {
+        fill: #7B93F9;
       }
     </style>
   </head>
   <body>
     <div id="root"></div>
     <div id="boot-splash" aria-label="Loading Selah">
-      <img class="light-logo" src="/SELAH_dark.png" alt="Selah" />
-      <img class="dark-logo" src="/SELAH_light.png" alt="Selah" />
+      <div class="lockup">
+        <svg width="44" height="44" viewBox="0 0 44 44" fill="none" aria-hidden="true">
+          <rect class="bar-fg" x="17.02" y="12.32" width="4.84" height="19.36" rx="2.42" />
+          <rect class="bar-accent" x="24.02" y="12.32" width="4.84" height="19.36" rx="2.42" />
+        </svg>
+        <div class="wordmark">selah<span>.</span></div>
+      </div>
     </div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

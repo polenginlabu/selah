@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { GoogleIcon } from '../icons'
+import { Logo } from '../components/Logo'
 
 export function SignIn() {
   const { signIn } = useAuth()
@@ -23,10 +24,7 @@ export function SignIn() {
     <div className="flex min-h-screen flex-col items-center justify-center px-6 text-center">
       <div className="w-full max-w-sm animate-rise">
         <p className="eyebrow mt-8">His mercies are new every morning</p>
-        <picture>
-          <source srcSet="/SELAH_light.png" media="(prefers-color-scheme: dark)" />
-          <img src="/SELAH_dark.png" alt="Selah" className="mx-auto mt-2 h-12 w-auto" />
-        </picture>
+        <Logo size={44} className="mt-3" />
         <p className="mx-auto mt-4 max-w-xs text-pretty text-muted">
           Read the Word, highlight what speaks to you, and journal your devotions — kept private and
           synced across your devices.

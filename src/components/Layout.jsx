@@ -18,6 +18,7 @@ import {
   TrophyIcon,
   XIcon,
 } from '../icons'
+import { Logo } from './Logo'
 
 const DEVELOPER_EMAIL = 'johnpaul.dj21@gmail.com'
 
@@ -48,8 +49,7 @@ export function Layout() {
       <header className="sticky top-0 z-sticky border-b border-line/70 bg-canvas/70 backdrop-blur-xl">
         <div className="flex items-center justify-between gap-2 px-4 py-3">
           <Link to="/" className="group flex items-center gap-2">
-            <img src="/SELAH_dark.png" alt="Selah" className="h-7 w-auto dark:hidden" />
-            <img src="/SELAH_light.png" alt="Selah" className="hidden h-7 w-auto dark:block" />
+            <Logo size={26} />
           </Link>
           <div className="flex items-center gap-1">
             {canInstall && (

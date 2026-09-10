@@ -6,6 +6,8 @@ export default {
     extend: {
       fontFamily: {
         sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        // Brand display face — headings, wordmark and buttons (Plus Jakarta Sans 700/800).
+        display: ['"Plus Jakarta Sans"', 'Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
       },
       zIndex: {
         dropdown: '20',

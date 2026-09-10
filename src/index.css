@@ -3,43 +3,60 @@
 @tailwind utilities;
 
 :root {
-  --canvas: 0.984 0.004 169;
-  --surface: 1 0 0;
-  --raised: 0.965 0.006 169;
-  --line: 0.9 0.008 169;
-  --ink: 0.22 0.015 169;
-  --muted: 0.48 0.012 169;
-  --brand: 0.46 0.062 169;
-  --brand-strong: 0.38 0.058 169;
-  --brand-wash: 0.94 0.025 169;
-  --accent: 0.78 0.09 82;
-  --accent-wash: 0.96 0.03 84;
-  --accent-ink: 0.52 0.09 82;
+  /* Selah brand — Sky / Navy Deep / Electric Blue (Figma brand guidelines) */
+  --canvas: 0.971 0.014 273;      /* #F2F5FF sky */
+  --surface: 1 0 0;               /* #FFFFFF */
+  --raised: 0.960 0.018 276;      /* #EEF1FE blue pale */
+  --line: 0.898 0.035 275;        /* #D6DCF5 */
+  --ink: 0.226 0.056 262;         /* #0D1B36 navy deep */
+  --muted: 0.447 0.034 261;       /* #4A5568 slate */
+  --brand: 0.593 0.207 269;       /* #4F6EF7 electric blue */
+  --brand-strong: 0.520 0.210 269;/* darkened blue for text-on-brand contrast */
+  --brand-wash: 0.960 0.018 276;  /* #EEF1FE */
+  --accent: 0.690 0.152 272;      /* #7B93F9 blue light */
+  --accent-wash: 0.960 0.018 276;
+  --accent-ink: 0.520 0.210 269;
   --on-brand: 1 0 0;
-  --on-accent: 0.22 0.02 82;
+  --on-accent: 0.226 0.056 262;
   color-scheme: light;
 }
 
 .dark {
-  --canvas: 0.15 0.012 169;
-  --surface: 0.19 0.014 169;
-  --raised: 0.23 0.016 169;
-  --line: 0.29 0.02 169;
-  --ink: 0.95 0.008 169;
-  --muted: 0.7 0.012 169;
-  --brand: 0.72 0.1 169;
-  --brand-strong: 0.72 0.1 169;
-  --brand-wash: 0.26 0.035 169;
-  --accent: 0.8 0.1 82;
-  --accent-wash: 0.3 0.045 84;
-  --accent-ink: 0.8 0.1 82;
-  --on-brand: 0.16 0.02 169;
-  --on-accent: 0.22 0.02 82;
+  /* Near-black ground (matches the pre-brand #101613 in darkness), carrying a
+     trace of the brand hue instead of the old green so it sits under the blues. */
+  --canvas: 0.190 0.010 262;      /* #111418 */
+  --surface: 0.228 0.012 262;     /* #191D22 */
+  --raised: 0.268 0.014 262;      /* #22262D */
+  --line: 0.325 0.018 262;
+  --ink: 0.960 0.008 262;
+  --muted: 0.700 0.020 262;
+  --brand: 0.690 0.152 272;       /* #7B93F9 blue light */
+  --brand-strong: 0.593 0.207 269;/* #4F6EF7 electric blue */
+  --brand-wash: 0.300 0.055 262;
+  --accent: 0.690 0.152 272;
+  --accent-wash: 0.300 0.055 268;
+  --accent-ink: 0.690 0.152 272;
+  --on-brand: 1 0 0;
+  --on-accent: 0.226 0.056 262;
   color-scheme: dark;
 }
 
 body {
   @apply bg-canvas text-ink font-sans;
+}
+
+/* Brand type scale: Plus Jakarta Sans for display/headings (tight, 700-800),
+   Inter for body copy. */
+h1,
+h2,
+h3 {
+  @apply font-display font-extrabold tracking-[-0.03em];
+}
+
+h4,
+h5,
+h6 {
+  @apply font-display font-bold tracking-[-0.02em];
 }
 
 /* iOS Safari gives native date/time inputs their own chrome that ignores
@@ -61,30 +78,30 @@ input[type='week'] {
 }
 
 .devotion-page {
-  --brand: 0.25 0.055 258;
-  --brand-strong: 0.25 0.055 258;
-  --brand-wash: 0.95 0.014 258;
+  --brand: 0.309 0.072 261;
+  --brand-strong: 0.309 0.072 261;
+  --brand-wash: 0.960 0.018 276;
 }
 
 .dark .devotion-page {
-  --brand: 0.62 0.08 258;
-  --brand-strong: 0.29 0.055 258;
-  --brand-wash: 0.24 0.028 258;
-  --on-brand: 0.95 0.008 95;
+  --brand: 0.690 0.152 272;
+  --brand-strong: 0.309 0.072 261;
+  --brand-wash: 0.290 0.066 261;
+  --on-brand: 0.965 0.010 272;
 }
 
 @layer components {
   .btn-primary {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-[transform,background-color,box-shadow] duration-150 ease-out active:scale-[0.97] bg-brand-strong text-on-brand shadow-[0_1px_2px_oklch(var(--ink)/0.04),0_4px_16px_-6px_oklch(var(--ink)/0.1)];
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 font-display text-sm font-bold transition-[transform,background-color,box-shadow] duration-150 ease-out active:scale-[0.97] bg-brand-strong text-on-brand shadow-[0_1px_2px_oklch(var(--ink)/0.04),0_4px_16px_-6px_oklch(var(--ink)/0.1)];
   }
   .btn-ghost {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-[transform,background-color,color] duration-150 ease-out active:scale-[0.97] text-muted;
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 font-display text-sm font-bold transition-[transform,background-color,color] duration-150 ease-out active:scale-[0.97] text-muted;
   }
   .btn-outline {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-[transform,background-color,border-color] duration-150 ease-out active:scale-[0.97] border border-line bg-surface text-ink;
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 font-display text-sm font-bold transition-[transform,background-color,border-color] duration-150 ease-out active:scale-[0.97] border border-line bg-surface text-ink;
   }
   .btn-accent {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-[transform,background-color,box-shadow] duration-150 ease-out active:scale-[0.97] bg-accent text-on-accent shadow-[0_1px_2px_oklch(var(--ink)/0.04),0_4px_16px_-6px_oklch(var(--ink)/0.1)];
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 font-display text-sm font-bold transition-[transform,background-color,box-shadow] duration-150 ease-out active:scale-[0.97] bg-accent text-on-accent shadow-[0_1px_2px_oklch(var(--ink)/0.04),0_4px_16px_-6px_oklch(var(--ink)/0.1)];
   }
   .card {
     @apply rounded-2xl border border-line bg-surface p-5 shadow-soft;
