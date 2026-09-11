@@ -18,6 +18,11 @@ const Attendance = lazy(() => import('./pages/Attendance'))
 const Reports = lazy(() => import('./pages/Reports'))
 const Admin = lazy(() => import('./pages/Admin'))
 const Goals = lazy(() => import('./pages/Goals'))
+// Two named exports from one module. Both resolve the same chunk, so it is
+// fetched once — lazy() needs a component as `default`, and a lazy component
+// has no properties to reach into.
+const PrivacyPolicy = lazy(() => import('./pages/Legal').then((m) => ({ default: m.PrivacyPolicy })))
+const TermsOfService = lazy(() => import('./pages/Legal').then((m) => ({ default: m.TermsOfService })))
 
 function RouteLoadingSpinner() {
   return <SplashScreen />
@@ -36,7 +41,11 @@ function withSuspense(element) {
   return <Suspense fallback={<RouteLoadingSpinner />}>{element}</Suspense>
 }
 
-export function App() {
+/**
+ * Everything behind sign-in. Split out so the legal pages can sit in front of
+ * the auth gate below.
+ */
+function AuthedApp() {
   const { user, loading } = useAuth()
 
   if (loading) return <SplashScreen />
@@ -61,6 +70,20 @@ export function App() {
         <Route path="devotion/:id" element={withSuspense(<DevotionEditor />)} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
+    </Routes>
+  )
+}
+
+export function App() {
+  return (
+    <Routes>
+      {/* PUBLIC, deliberately. Google will not accept a privacy policy URL it
+          cannot reach, and a visitor deciding whether to sign in shouldn't have
+          to sign in first to read how their data is handled. These sit ahead of
+          the auth gate for that reason. */}
+      <Route path="/privacy" element={withSuspense(<PrivacyPolicy />)} />
+      <Route path="/terms" element={withSuspense(<TermsOfService />)} />
+      <Route path="*" element={<AuthedApp />} />
     </Routes>
   )
 }
