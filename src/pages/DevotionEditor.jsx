@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useAssistantPassage } from '../context/AssistantContext'
 import { useBeforeUnload, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useRewards } from '../context/RewardsContext'
@@ -98,6 +99,23 @@ export default function DevotionEditor() {
   const [body, setBody] = useState('')
   const [draftRestored, setDraftRestored] = useState(false)
   const [addingVerse, setAddingVerse] = useState(false)
+
+  // Publish this devotion's verse to the global assistant, so "key takeaways"
+  // works here. Only the verse: their observation, application and prayer stay
+  // on the device — that is the most personal writing in the app, and takeaways
+  // on the passage do not need it. Memoised so the effect doesn't loop.
+  const assistantPassage = useMemo(
+    () =>
+      verse?.reference && verse?.text
+        ? {
+            reference: verse.reference,
+            translation: 'as saved',
+            verses: [{ verse: 0, text: verse.text }],
+          }
+        : null,
+    [verse?.reference, verse?.text]
+  )
+  useAssistantPassage(assistantPassage)
   const [bookQuery, setBookQuery] = useState('')
   const [showBookSuggestions, setShowBookSuggestions] = useState(false)
   const [chapterInput, setChapterInput] = useState('')

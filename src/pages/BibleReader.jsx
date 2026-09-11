@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
+import { useAssistantPassage } from '../context/AssistantContext'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { ChevronLeftIcon, ChevronRightIcon, PencilIcon } from '../icons'
@@ -218,6 +219,22 @@ export default function BibleReader() {
     }
   }, [chapterData, selectedVerses, book, chapter])
 
+  // What the assistant is allowed to quote: the verses highlighted if there
+  // is a selection, otherwise the whole open chapter.
+  const assistantPassage = useMemo(() => {
+    if (!chapterData) return null
+    const verses = selectedVerses.size
+      ? chapterData.verses.filter((verse) => selectedVerses.has(verse.verse))
+      : chapterData.verses
+    return {
+      reference: selection?.reference ?? `${book} ${chapter}`,
+      translation: chapterData.translationName,
+      verses: verses.map((verse) => ({ verse: verse.verse, text: verse.text })),
+    }
+  }, [chapterData, selectedVerses, selection, book, chapter])
+
+  useAssistantPassage(assistantPassage)
+
   const changeChapter = (delta) => {
     if (!bookInfo) return
     let bookIndex = BIBLE_BOOKS.findIndex((bk) => bk.name === book)
@@ -285,6 +302,7 @@ export default function BibleReader() {
         </div>
       )}
       {error && <p className="mt-8 text-center text-sm text-red-500">{error}</p>}
+
       {chapterData && !loading && (
         <article className="mt-5 animate-fade-in font-sans text-[1.2rem] leading-loose text-ink">
           {chapterData.verses.map((verse) => (

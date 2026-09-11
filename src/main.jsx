@@ -6,6 +6,7 @@ import { AuthProvider } from './context/AuthContext'
 import { ThemeProvider } from './context/ThemeContext'
 import { RewardsProvider } from './context/RewardsContext'
 import { ToastProvider } from './context/ToastContext'
+import { AssistantProvider } from './context/AssistantContext'
 import './index.css'
 
 createRoot(document.getElementById('root')).render(
@@ -14,9 +15,11 @@ createRoot(document.getElementById('root')).render(
       <ToastProvider>
         <AuthProvider>
           <RewardsProvider>
-            <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-              <App />
-            </BrowserRouter>
+            <AssistantProvider>
+              <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+                <App />
+              </BrowserRouter>
+            </AssistantProvider>
           </RewardsProvider>
         </AuthProvider>
       </ToastProvider>

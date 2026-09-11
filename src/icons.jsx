@@ -112,6 +112,14 @@ export const FlagIcon = (props) => (
   </svg>
 )
 
+export const TargetIcon = (props) => (
+  <svg {...ICON_PROPS} {...props}>
+    <circle cx="12" cy="12" r="9" />
+    <circle cx="12" cy="12" r="5" />
+    <circle cx="12" cy="12" r="1.5" />
+  </svg>
+)
+
 export const TrophyIcon = (props) => (
   <svg {...ICON_PROPS} {...props}>
     <path d="M7 4h10v5a5 5 0 0 1-10 0V4z" />

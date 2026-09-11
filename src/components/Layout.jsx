@@ -7,6 +7,7 @@ import { disableNotifications, enableNotifications, onForegroundMessage, sendTes
 import { usePwaInstall } from '../lib/pwaInstall'
 import {
   BellIcon,
+  ChatIcon,
   DownloadIcon,
   FlagIcon,
   LockIcon,
@@ -15,12 +16,15 @@ import {
   PencilIcon,
   ShareIcon,
   SproutIcon,
+  TargetIcon,
   SunIcon,
   TrophyIcon,
   XIcon,
 } from '../icons'
 import { Logo } from './Logo'
 import { isAdminEmail } from '../data/admin'
+import { useAssistant } from '../context/AssistantContext'
+import { StudyAssistant } from './StudyAssistant'
 
 export function Layout() {
   const { user, logout } = useAuth()
@@ -28,6 +32,7 @@ export function Layout() {
   const location = useLocation()
   const { canInstall, canPrompt, isIos, promptInstall } = usePwaInstall()
   const [showIosInstall, setShowIosInstall] = useState(false)
+  const { open: assistantOpen, setOpen: setAssistantOpen, passage: assistantPassage } = useAssistant()
 
   useEffect(() => {
     let unsubscribe
@@ -76,6 +81,19 @@ export function Layout() {
         <Outlet />
       </main>
 
+      {/* Global assistant: available on every page, and aware of the passage
+          the current page published (if any). Sits above the bottom nav. */}
+      <button
+        onClick={() => setAssistantOpen(true)}
+        aria-label="Ask the study assistant"
+        className="fixed bottom-[calc(5.25rem+env(safe-area-inset-bottom))] right-4 z-sticky flex h-12 w-12 items-center justify-center rounded-full bg-brand-strong text-on-brand shadow-glow transition-transform active:scale-90"
+      >
+        <ChatIcon width={19} height={19} />
+      </button>
+      {assistantOpen && (
+        <StudyAssistant passage={assistantPassage} onClose={() => setAssistantOpen(false)} />
+      )}
+
       <div className="fixed inset-x-0 bottom-0 z-sticky mx-auto max-w-xl">
         <nav
           className="border-t border-line/70 bg-canvas/80 backdrop-blur-xl"
@@ -85,6 +103,7 @@ export function Layout() {
             <NavItem to="/" end icon={<PencilIcon width={20} height={20} />} label="Devotions" />
             <NavItem to="/conquest" icon={<FlagIcon width={20} height={20} />} label="Conquest" />
             <NavItem to="/disciple" icon={<SproutIcon width={20} height={20} />} label="Disciple" />
+            <NavItem to="/goals" icon={<TargetIcon width={20} height={20} />} label="Goals" />
             <NavItem to="/achievements" icon={<TrophyIcon width={20} height={20} />} label="Growth" />
           </div>
         </nav>

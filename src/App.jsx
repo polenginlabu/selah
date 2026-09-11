@@ -17,6 +17,7 @@ const DiscipleTree = lazy(() => import('./pages/DiscipleTree'))
 const Attendance = lazy(() => import('./pages/Attendance'))
 const Reports = lazy(() => import('./pages/Reports'))
 const Admin = lazy(() => import('./pages/Admin'))
+const Goals = lazy(() => import('./pages/Goals'))
 
 function RouteLoadingSpinner() {
   return <SplashScreen />
@@ -52,6 +53,7 @@ export function App() {
         <Route path="disciple" element={withSuspense(<DiscipleTree />)} />
         <Route path="attendance" element={withSuspense(<Attendance />)} />
         <Route path="attendance/reports" element={withSuspense(<Reports />)} />
+        <Route path="goals" element={withSuspense(<Goals />)} />
         <Route path="leaderboard" element={withSuspense(<Leaderboard />)} />
         {/* Admin itself redirects non-admins; the RPCs it calls enforce this in Postgres. */}
         <Route path="admin" element={withSuspense(<Admin />)} />
