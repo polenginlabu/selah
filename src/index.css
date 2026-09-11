@@ -75,6 +75,11 @@ input[type='week'] {
   appearance: none;
   min-width: 0;
   color-scheme: light;
+  /* Belt and braces for the empty-field collapse above: 2.375rem is exactly
+     what .input computes to (py-2 + text-sm's 1.25rem line + 1px borders).
+     Coupled to .input by hand — if that padding or text size changes, change
+     this with it. */
+  min-height: 2.375rem;
 }
 
 /* Pinning color-scheme: light above (for the iOS picker bug) also forces the
@@ -106,6 +111,12 @@ input[type='week']::-webkit-date-and-time-value {
   text-align: left;
   margin: 0;
   line-height: 1.25rem;
+  /* iOS shows NOTHING in an empty date input — no mm/dd/yyyy placeholder the
+     way Chrome does — so with no text there is no line box and the control
+     collapses to its padding, sitting visibly shorter than the fields around
+     it. Reserving one line's height keeps an empty field the same size as a
+     filled one. */
+  min-height: 1.25rem;
 }
 
 input[type='date']::-webkit-datetime-edit,
