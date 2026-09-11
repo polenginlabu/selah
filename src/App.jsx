@@ -23,6 +23,7 @@ const Goals = lazy(() => import('./pages/Goals'))
 // has no properties to reach into.
 const PrivacyPolicy = lazy(() => import('./pages/Legal').then((m) => ({ default: m.PrivacyPolicy })))
 const TermsOfService = lazy(() => import('./pages/Legal').then((m) => ({ default: m.TermsOfService })))
+const DataDeletion = lazy(() => import('./pages/Legal').then((m) => ({ default: m.DataDeletion })))
 
 function RouteLoadingSpinner() {
   return <SplashScreen />
@@ -32,7 +33,6 @@ function SplashScreen() {
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-5 px-6 text-center">
       <DotLottieReact src={splashAnimation} autoplay loop backgroundColor="transparent" className="h-40 w-40" />
-      <p className="font-sans text-xl font-semibold tracking-tight text-ink">Selah</p>
     </div>
   )
 }
@@ -83,6 +83,7 @@ export function App() {
           the auth gate for that reason. */}
       <Route path="/privacy" element={withSuspense(<PrivacyPolicy />)} />
       <Route path="/terms" element={withSuspense(<TermsOfService />)} />
+      <Route path="/data-deletion" element={withSuspense(<DataDeletion />)} />
       <Route path="*" element={<AuthedApp />} />
     </Routes>
   )

@@ -147,6 +147,54 @@ export function PrivacyPolicy() {
   )
 }
 
+/**
+ * Standalone data-deletion instructions.
+ *
+ * Meta requires a dedicated "Data deletion instructions URL" for Facebook
+ * Login, and pointing it at a section buried in the privacy policy tends to
+ * get rejected. Public, like the other two — the whole point is that someone
+ * who can no longer sign in can still find out how to have their data removed.
+ */
+export function DataDeletion() {
+  return (
+    <Shell title="Deleting your data">
+      <p className="mt-4 text-sm leading-relaxed text-muted">
+        You can remove your information from Selah at any time. There are two options.
+      </p>
+
+      <Section title="Delete individual items yourself">
+        <p>
+          Signed in, you can delete any devotion, disciple, goal, community post or prayer request
+          directly in the app. Deleting an item removes it permanently.
+        </p>
+      </Section>
+
+      <Section title="Delete your whole account">
+        <p>
+          Email <strong>{CONTACT_EMAIL}</strong> from the address you signed in with, asking for
+          your account to be deleted. We will confirm and remove it within 30 days.
+        </p>
+        <p>
+          If you signed in with Facebook, say so in the email so we can match the right account.
+        </p>
+      </Section>
+
+      <Section title="What gets deleted">
+        <p>
+          Your sign-in record and profile, every devotion and journal entry, your disciple tree and
+          the attendance recorded against it, your goals and pledges, your community posts and
+          prayer requests, your achievements and experience, and any notification tokens for your
+          devices.
+        </p>
+        <p>
+          Deletion is permanent and cannot be undone. Posts already replied to by others may leave
+          a record that a deleted user participated, without your name attached.
+        </p>
+      </Section>
+    </Shell>
+  )
+}
+
 export function TermsOfService() {
   return (
     <Shell title="Terms of Service">

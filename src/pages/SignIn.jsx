@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import {
   GoogleIcon,
+  FacebookIcon,
   PencilIcon,
   BookOpenIcon,
   SproutIcon,
@@ -62,18 +63,20 @@ const FEATURES = [
 export function SignIn() {
   const { signIn } = useAuth()
   const [error, setError] = useState(null)
-  const [loading, setLoading] = useState(false)
+  // Holds the provider that is mid-flight, so only its own button changes label.
+  const [loading, setLoading] = useState(null)
 
-  const handleSignIn = async () => {
+  const handleSignIn = async (provider) => {
     setError(null)
-    setLoading(true)
+    setLoading(provider)
     try {
-      await signIn()
+      await signIn(provider)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Sign-in failed')
-    } finally {
-      setLoading(false)
+      setLoading(null)
     }
+    // No finally: on success the browser navigates to the provider, and
+    // clearing the flag would flash the buttons back to idle on the way out.
   }
 
   return (
@@ -94,12 +97,30 @@ export function SignIn() {
           Selah is a devotional and discipleship app for your local church — read the Word, journal
           what it stirs, and walk with the people you are discipling.
         </p>
-        <button onClick={handleSignIn} disabled={loading} className="btn-outline mt-7 w-full">
-          <GoogleIcon />
-          {loading ? 'Signing in…' : 'Continue with Google'}
-        </button>
+        <div className="mt-7 space-y-2">
+          <button
+            onClick={() => handleSignIn('google')}
+            disabled={!!loading}
+            className="btn-outline w-full disabled:opacity-60"
+          >
+            <GoogleIcon />
+            {loading === 'google' ? 'Signing in…' : 'Continue with Google'}
+          </button>
+          <button
+            onClick={() => handleSignIn('facebook')}
+            disabled={!!loading}
+            className="btn-outline w-full disabled:opacity-60"
+          >
+            <FacebookIcon width={18} height={18} className="text-[#1877F2]" />
+            {loading === 'facebook' ? 'Signing in…' : 'Continue with Facebook'}
+          </button>
+        </div>
         {error && <p className="mt-4 text-sm text-red-500">{error}</p>}
-        <p className="mt-3 text-[0.7rem] text-muted">
+        <p className="mt-3 text-[0.7rem] text-muted text-pretty">
+          Use the same one each time — signing in with a different provider under a different email
+          creates a separate account.
+        </p>
+        <p className="mt-2 text-[0.7rem] text-muted">
           Free to use. We only ever see your name, email and profile picture.
         </p>
       </section>

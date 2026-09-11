@@ -19,9 +19,13 @@ export function AuthProvider({ children }) {
     return () => listener.subscription.unsubscribe()
   }, [])
 
-  const signIn = async () => {
+  /**
+   * @param provider 'google' | 'facebook' — both are configured in the
+   * Supabase dashboard. Defaults to Google so existing callers are unchanged.
+   */
+  const signIn = async (provider = 'google') => {
     await supabase.auth.signInWithOAuth({
-      provider: 'google',
+      provider,
       options: { redirectTo: window.location.origin },
     })
   }
