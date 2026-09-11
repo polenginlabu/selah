@@ -1186,7 +1186,7 @@ function EditDetailsModal({ person, onSave, onClose, onMove, onRemove }) {
               type="date"
               value={birthday}
               onChange={(e) => setBirthday(e.target.value)}
-              className="input block h-11 w-full"
+              className="input"
             />
           </div>
           <button type="submit" className="btn-accent w-full rounded-2xl py-4 text-base font-semibold active:scale-[0.98]">

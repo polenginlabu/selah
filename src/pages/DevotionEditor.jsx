@@ -309,7 +309,7 @@ export default function DevotionEditor() {
       <div className="space-y-3">
         <label className="block">
           <span className="mb-1 block text-[0.65rem] font-semibold uppercase tracking-wide text-muted">Date</span>
-          <input type="date" className="input text-sm" value={date} onChange={(event) => setDate(event.target.value)} />
+          <input type="date" className="input" value={date} onChange={(event) => setDate(event.target.value)} />
         </label>
         <label className="block">
           <span className="mb-1 block text-[0.65rem] font-semibold uppercase tracking-wide text-muted">Method</span>

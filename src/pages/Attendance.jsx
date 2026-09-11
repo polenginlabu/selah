@@ -28,12 +28,16 @@ import {
   upsertAttendance,
   promoteDiscipleTier,
 } from '../data/attendance'
+import { useToast } from '../context/ToastContext'
+import { usePending } from '../lib/usePending'
 
 export default function Attendance() {
   const { user } = useAuth()
+  const toast = useToast()
   const [disciples, setDisciples] = useState([])
   const [rootDiscipleId, setRootDiscipleId] = useState(null)
   const [attendanceCounts, setAttendanceCounts] = useState({})
+  const pending = usePending()
   const [records, setRecords] = useState([])
   const [loading, setLoading] = useState(true)
   const [showAddService, setShowAddService] = useState(false)
@@ -119,13 +123,21 @@ export default function Attendance() {
             ]
       )
       try {
-        await upsertAttendance(discipleId, selectedService, sessionDate, present)
+        // Tracked so the row can show the write is still in flight — the
+        // optimistic flip alone looks identical to an already-saved tap, which
+        // is what makes people tap again on a slow connection.
+        await pending.track(discipleId, () =>
+          upsertAttendance(discipleId, selectedService, sessionDate, present)
+        )
         setAttendanceCounts((prev) => {
           const delta = (present ? 1 : 0) - (previousPresent === true ? 1 : 0)
           return { ...prev, [discipleId]: Math.max(0, (prev[discipleId] ?? 0) + delta) }
         })
       } catch (err) {
         console.error('Failed to set attendance:', err)
+        // Previously this reverted in silence, so a failed save looked like a
+        // tap that never registered.
+        toast.error('That did not save — check your connection.')
         setRecords((prev) =>
           prev.map((r) => (r.discipleId === discipleId ? { ...r, present: previousPresent ?? false } : r))
         )
@@ -165,6 +177,8 @@ export default function Attendance() {
       })
     } catch (err) {
       console.error('Failed to mark all present:', err)
+      toast.error('Some of those did not save — check your connection.')
+      loadAttendanceData()
     }
   }
 
@@ -176,6 +190,7 @@ export default function Attendance() {
       await promoteDiscipleTier(disciple.id, newTier)
     } catch (err) {
       console.error('Failed to update tier:', err)
+      toast.error('That did not save — check your connection.')
       setDisciples((prev) =>
         prev.map((d) => (d.id === disciple.id ? { ...d, manual_tier: disciple.manual_tier } : d))
       )
@@ -383,7 +398,16 @@ export default function Attendance() {
                 >
                   <RefreshIcon width={12} height={12} strokeWidth={2.5} />
                 </button>
-                <div className="flex shrink-0 gap-1.5">
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {/* Only while a write is in flight. The optimistic flip
+                      already happened, so this says "saving", not "loading". */}
+                  {pending.has(disciple.id) && (
+                    <span
+                      role="status"
+                      aria-label="Saving"
+                      className="h-3 w-3 animate-spin rounded-full border-2 border-line border-t-brand"
+                    />
+                  )}
                   <button
                     onClick={() => setPresence(disciple.id, true)}
                     aria-label={`Mark ${disciple.name} present`}

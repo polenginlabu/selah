@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { ConfirmDialog } from '../components/ConfirmDialog'
+import { usePending } from '../lib/usePending'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 import {
@@ -124,7 +126,7 @@ function PlanList({ item, onAdd, onToggle, onDelete }) {
             {c.note && <span className="block truncate text-[0.65rem] text-muted">{c.note}</span>}
           </span>
           <button
-            onClick={() => onDelete(c.id)}
+            onClick={() => onDelete(c)}
             aria-label={`Remove ${c.who} from the plan`}
             className="shrink-0 text-muted transition-colors hover:text-red-500"
           >
@@ -335,7 +337,7 @@ function ItemRow({ item, canEdit, onChange, onDelete, onAddPlan, onTogglePlan, o
           </button>
           {canEdit && (
             <button
-              onClick={() => onDelete(item.id)}
+              onClick={() => onDelete(item)}
               aria-label={`Delete ${item.name}`}
               className="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors active:scale-90 hover:text-red-500"
             >
@@ -437,7 +439,7 @@ function GoalCard({ goal, onChangeItem, onAddItem, onDeleteGoal, onDeleteItem, o
               onDelete={onDeleteItem}
               onAddPlan={planHandlers.add}
               onTogglePlan={planHandlers.toggle}
-              onDeletePlan={planHandlers.remove}
+              onDeletePlan={(contribution) => setConfirming({ kind: 'pledge', contribution })}
             />
           ))
         )}
@@ -514,6 +516,8 @@ export default function Goals() {
   const [planNote, setPlanNote] = useState('')
   const [disciples, setDisciples] = useState([])
   const [picked, setPicked] = useState(new Map())
+  const [confirming, setConfirming] = useState(null)
+  const pending = usePending()
 
   // One pending write per item. Tapping + five times should feel instant and
   // cost one round trip, not five — and the absolute value means a late or
@@ -634,7 +638,6 @@ export default function Goals() {
   }
 
   const removeGoal = async (goal) => {
-    if (!window.confirm(`Delete "${goal.name}" and its ${goal.items.length} item(s)?`)) return
     const previous = goals
     setGoals((prev) => prev.filter((g) => g.id !== goal.id))
     try {
@@ -770,6 +773,37 @@ export default function Goals() {
     }
   }
 
+  // One dialog drives all three deletes; each entry says what to say and what
+  // to run, so adding another destructive action is one object, not a new
+  // piece of UI.
+  const confirmations = {
+    goal: {
+      title: `Delete "${confirming?.goal?.name}"?`,
+      body: `This removes the goal, its ${confirming?.goal?.items?.length ?? 0} item(s) and every pledge on them. This cannot be undone.`,
+      confirmLabel: 'Delete goal',
+      confirmPhrase: 'DELETE',
+      run: () => removeGoal(confirming.goal),
+    },
+    item: {
+      title: `Delete "${confirming?.item?.name}"?`,
+      body: 'Its count and any pledges planned against it go too. This cannot be undone.',
+      confirmLabel: 'Delete item',
+      run: () => removeItem(confirming.item.id),
+    },
+    pledge: {
+      title: `Remove ${confirming?.contribution?.who} from the plan?`,
+      body: 'The pledge is removed. The live count is not affected.',
+      confirmLabel: 'Remove',
+      run: () => planHandlers.remove(confirming.contribution.id),
+    },
+  }[confirming?.kind]
+
+  const runConfirmed = async () => {
+    if (!confirmations) return
+    await pending.track('confirm', confirmations.run)
+    setConfirming(null)
+  }
+
   const stats = useMemo(() => {
     const items = goals.flatMap((g) => g.items)
     const current = items.reduce((sum, i) => sum + i.current, 0)
@@ -836,8 +870,8 @@ export default function Goals() {
               goal={goal}
               onChangeItem={changeItem}
               onAddItem={(goalId) => setModal({ type: 'item', goalId })}
-              onDeleteGoal={removeGoal}
-              onDeleteItem={removeItem}
+              onDeleteGoal={(goal) => setConfirming({ kind: 'goal', goal })}
+              onDeleteItem={(item) => setConfirming({ kind: 'item', item })}
               onEditPeople={openParticipants}
               planHandlers={planHandlers}
             />
@@ -870,7 +904,7 @@ export default function Goals() {
               type="date"
               value={goalDate}
               onChange={(e) => setGoalDate(e.target.value)}
-              className="input block h-11 w-full"
+              className="input"
               required
             />
           </div>
@@ -920,6 +954,18 @@ export default function Goals() {
             onClear={() => setPicked(new Map())}
           />
         </Modal>
+      )}
+
+      {confirming && confirmations && (
+        <ConfirmDialog
+          title={confirmations.title}
+          body={confirmations.body}
+          confirmLabel={confirmations.confirmLabel}
+          confirmPhrase={confirmations.confirmPhrase}
+          busy={pending.has('confirm')}
+          onCancel={() => setConfirming(null)}
+          onConfirm={runConfirmed}
+        />
       )}
 
       {modal?.type === 'plan' && (

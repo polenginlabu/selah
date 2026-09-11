@@ -20,6 +20,7 @@ import {
   CONQUEST_TASKS,
 } from '../lib/gamification'
 import { ChevronLeftIcon, ChevronRightIcon, CheckIcon, TrashIcon, PlusIcon, XIcon, ACHIEVEMENT_ICONS } from '../icons'
+import { usePending } from '../lib/usePending'
 
 async function getRecurringItems(userId) {
   const { data, error } = await supabase.from('conquest_recurring').select('id, title, category, days').eq('user_id', userId).order('created_at')
@@ -179,6 +180,7 @@ export default function ConquestWeek() {
     today = todayISO(),
     [weekStart, setWeekStart] = useState(startOfWeekMonday(today)),
     [week, setWeek] = useState(void 0),
+    pendingToggles = usePending(),
     days = useMemo(() => weekDays(weekStart), [weekStart]),
     [selectedDayIndex, setSelectedDayIndex] = useState(() => Math.max(0, days.indexOf(today))),
     [showAddSheet, setShowAddSheet] = useState(false),
@@ -223,17 +225,33 @@ export default function ConquestWeek() {
         console.error('addConquestItem failed', err), setError('Could not add that — check your connection and try again.')
       }))
     },
+    // Deliberately NOT optimistic. `week` is fed by a realtime subscription
+    // whose handler refetches the row, and a fetch that began before the write
+    // committed will overwrite an optimistic flip — so the tick bounces back
+    // and forth. Showing a spinner until the server confirms is slower by a
+    // round trip but never lies about what is saved.
     handleToggleItem = (itemId, done) => {
-      user && (setError(null), toggleConquestItem(user.id, weekStart, itemId, done).then(result => {
-        result && handleReward(result)
-      }).catch(err => {
-        console.error('toggleConquestItem failed', err), setError('Could not update that item.')
-      }))
+      if (!user || pendingToggles.has(itemId)) return
+      setError(null)
+      pendingToggles
+        .track(itemId, () => toggleConquestItem(user.id, weekStart, itemId, done))
+        .then(result => {
+          result && handleReward(result)
+        })
+        .catch(err => {
+          console.error('toggleConquestItem failed', err)
+          setError('Could not update that item.')
+        })
     },
     handleRemoveItem = itemId => {
-      user && (setError(null), removeConquestItem(user.id, weekStart, itemId).catch(err => {
-        console.error('removeConquestItem failed', err), setError('Could not remove that item.')
-      }))
+      if (!user || pendingToggles.has(itemId)) return
+      setError(null)
+      pendingToggles
+        .track(itemId, () => removeConquestItem(user.id, weekStart, itemId))
+        .catch(err => {
+          console.error('removeConquestItem failed', err)
+          setError('Could not remove that item.')
+        })
     },
     handleReward = result => {
       (result.xpGained > 0 || result.newAchievements.length > 0) && showReward(result)
@@ -264,9 +282,9 @@ export default function ConquestWeek() {
           isSelected = index === selectedDayIndex,
           isTodayTab = date === today;
         return <button onClick={() => setSelectedDayIndex(index)} className={`relative flex flex-1 flex-col items-center gap-0.5 rounded-xl py-2 transition-colors duration-200 ${isSelected ? "bg-accent text-accent-on" : "bg-raised text-muted hover:text-ink"}`} key={date}>{isTodayTab && !isSelected && <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-accent" />}<span className="font-sans text-[0.7rem] font-semibold tracking-wide">{DAY_LABELS[index]}</span>{totalForDay > 0 && <span className={`text-[0.6rem] ${isSelected ? "text-accent-on/70" : "text-muted"}`}>{doneForDay}/{totalForDay}</span>}</button>;
-      })}</div><div className="flex items-center justify-between gap-2"><div><p className="eyebrow">{isToday ? "Today · " : ""}{formatWeekday(selectedDate)}</p><h2 className="font-sans text-lg font-semibold tracking-tight">{isToday ? "Today's Conquest" : `${formatWeekday(selectedDate)}'s Plan`}</h2></div><div className="flex items-center gap-2"><button onClick={() => setSelectedDayIndex(idx => Math.max(0, idx - 1))} disabled={selectedDayIndex === 0} aria-label="Previous day" className="flex h-8 w-8 items-center justify-center rounded-full border border-line text-muted transition-colors hover:bg-raised disabled:opacity-30"><ChevronLeftIcon width={15} height={15} /></button><button onClick={() => setSelectedDayIndex(idx => Math.min(6, idx + 1))} disabled={selectedDayIndex === 6} aria-label="Next day" className="flex h-8 w-8 items-center justify-center rounded-full border border-line text-muted transition-colors hover:bg-raised disabled:opacity-30"><ChevronRightIcon width={15} height={15} /></button></div></div><div onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} className="min-h-[8rem] space-y-2">{week === void 0 ? <LoadingSkeleton /> : dayItems.length === 0 ? <div className="flex flex-col items-center gap-2 py-10 text-center"><span className="text-3xl opacity-40" aria-hidden={!0}>⚔️</span><p className="text-sm text-pretty text-muted">No battles planned yet.<br />Add your first task below.</p></div> : dayItems.map(item => <div className={`flex items-center gap-3 rounded-2xl px-4 py-3.5 transition-colors ${item.done ? "bg-raised/60" : "card"}`} key={item.id}><button onClick={() => handleToggleItem(item.id, !item.done)} aria-pressed={item.done} aria-label={item.done ? `Mark "${item.title}" not done` : `Mark "${item.title}" done`} className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${item.done ? "border-accent bg-accent text-accent-on" : "border-accent/40 text-transparent hover:border-accent"}`}><CheckIcon width={13} height={13} strokeWidth={3} /></button>{item.category && <span aria-hidden={!0} className="h-2 w-2 shrink-0 rounded-full" style={{
+      })}</div><div className="flex items-center justify-between gap-2"><div><p className="eyebrow">{isToday ? "Today · " : ""}{formatWeekday(selectedDate)}</p><h2 className="font-sans text-lg font-semibold tracking-tight">{isToday ? "Today's Conquest" : `${formatWeekday(selectedDate)}'s Plan`}</h2></div><div className="flex items-center gap-2"><button onClick={() => setSelectedDayIndex(idx => Math.max(0, idx - 1))} disabled={selectedDayIndex === 0} aria-label="Previous day" className="flex h-8 w-8 items-center justify-center rounded-full border border-line text-muted transition-colors hover:bg-raised disabled:opacity-30"><ChevronLeftIcon width={15} height={15} /></button><button onClick={() => setSelectedDayIndex(idx => Math.min(6, idx + 1))} disabled={selectedDayIndex === 6} aria-label="Next day" className="flex h-8 w-8 items-center justify-center rounded-full border border-line text-muted transition-colors hover:bg-raised disabled:opacity-30"><ChevronRightIcon width={15} height={15} /></button></div></div><div onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} className="min-h-[8rem] space-y-2">{week === void 0 ? <LoadingSkeleton /> : dayItems.length === 0 ? <div className="flex flex-col items-center gap-2 py-10 text-center"><span className="text-3xl opacity-40" aria-hidden={!0}>⚔️</span><p className="text-sm text-pretty text-muted">No battles planned yet.<br />Add your first task below.</p></div> : dayItems.map(item => <div className={`flex items-center gap-3 rounded-2xl px-4 py-3.5 transition-colors ${item.done ? "bg-raised/60" : "card"}`} key={item.id}><button onClick={() => handleToggleItem(item.id, !item.done)} disabled={pendingToggles.has(item.id)} aria-pressed={item.done} aria-busy={pendingToggles.has(item.id)} aria-label={item.done ? `Mark "${item.title}" not done` : `Mark "${item.title}" done`} className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${item.done ? "border-accent bg-accent text-accent-on" : "border-accent/40 text-transparent hover:border-accent"}`}>{pendingToggles.has(item.id) ? <span className="h-3 w-3 animate-spin rounded-full border-2 border-current/30 border-t-accent" /> : <CheckIcon width={13} height={13} strokeWidth={3} />}</button>{item.category && <span aria-hidden={!0} className="h-2 w-2 shrink-0 rounded-full" style={{
           backgroundColor: ACHIEVEMENT_CATEGORIES_BY_ID[item.category].color
-        }} />}<span className={`flex-1 text-sm ${item.done ? "text-muted line-through" : "text-ink"}`}>{item.title}</span><button onClick={() => handleRemoveItem(item.id)} aria-label={`Remove ${item.title}`} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted/60 transition-colors hover:bg-red-500/10 hover:text-red-500"><TrashIcon width={14} height={14} /></button></div>)}</div><button onClick={openAddSheet} className="btn-accent w-full py-3.5 text-sm"><PlusIcon width={17} height={17} /> Add to {DAY_LABELS[selectedDayIndex]}</button><button onClick={() => setShowManageRecurring(!0)} className="w-full rounded-2xl border border-line bg-raised px-4 py-3 text-sm font-semibold text-ink transition-colors hover:border-accent/40">🔁 Manage Recurring Items{recurringItems.length > 0 && ` (${recurringItems.length})`}</button>{showAddSheet && <AddItemSheet dayLabel={formatWeekday(selectedDate)} draft={draft} setDraft={setDraft} onSubmit={submitDraft} onClose={closeAddSheet} onQuickAdd={handleAddItem} existingTitles={dayItems.map(item => item.title)} onAddRecurring={(title, category, recurDays) => {
+        }} />}<span className={`flex-1 text-sm ${item.done ? "text-muted line-through" : "text-ink"}`}>{item.title}</span><button onClick={() => handleRemoveItem(item.id)} disabled={pendingToggles.has(item.id)} aria-busy={pendingToggles.has(item.id)} aria-label={`Remove ${item.title}`} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted/60 transition-colors hover:bg-red-500/10 hover:text-red-500 disabled:opacity-40">{pendingToggles.has(item.id) ? <span className="h-3 w-3 animate-spin rounded-full border-2 border-line border-t-muted" /> : <TrashIcon width={14} height={14} />}</button></div>)}</div><button onClick={openAddSheet} className="btn-accent w-full py-3.5 text-sm"><PlusIcon width={17} height={17} /> Add to {DAY_LABELS[selectedDayIndex]}</button><button onClick={() => setShowManageRecurring(!0)} className="w-full rounded-2xl border border-line bg-raised px-4 py-3 text-sm font-semibold text-ink transition-colors hover:border-accent/40">🔁 Manage Recurring Items{recurringItems.length > 0 && ` (${recurringItems.length})`}</button>{showAddSheet && <AddItemSheet dayLabel={formatWeekday(selectedDate)} draft={draft} setDraft={setDraft} onSubmit={submitDraft} onClose={closeAddSheet} onQuickAdd={handleAddItem} existingTitles={dayItems.map(item => item.title)} onAddRecurring={(title, category, recurDays) => {
       user && addRecurringItem(user.id, title, category, recurDays).then(newItem => setRecurringItems(prev => [...prev, newItem])).catch(console.error);
     }} />}{showManageRecurring && <ManageRecurringSheet items={recurringItems} onRemove={id => {
       removeRecurringItem(id).then(() => setRecurringItems(prev => prev.filter(item => item.id !== id))).catch(console.error);

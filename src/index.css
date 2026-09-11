@@ -91,6 +91,33 @@ input[type='week'] {
   cursor: pointer;
 }
 
+/* iOS renders the date TEXT through its own shadow-DOM parts, which carry a
+   line-height and vertical margin of their own. Those sit inside the control's
+   content box, so a date input ends up visibly taller than a text input with
+   identical padding — the box model is right, the contents are not. Matching
+   them to .input's line-height (text-sm = 1.25rem) is what makes the two line
+   up, and it removes the need to force a height on the element. iOS also
+   centres this text where every other input is left-aligned. */
+input[type='date']::-webkit-date-and-time-value,
+input[type='time']::-webkit-date-and-time-value,
+input[type='datetime-local']::-webkit-date-and-time-value,
+input[type='month']::-webkit-date-and-time-value,
+input[type='week']::-webkit-date-and-time-value {
+  text-align: left;
+  margin: 0;
+  line-height: 1.25rem;
+}
+
+input[type='date']::-webkit-datetime-edit,
+input[type='date']::-webkit-datetime-edit-fields-wrapper,
+input[type='time']::-webkit-datetime-edit,
+input[type='time']::-webkit-datetime-edit-fields-wrapper,
+input[type='datetime-local']::-webkit-datetime-edit,
+input[type='datetime-local']::-webkit-datetime-edit-fields-wrapper {
+  padding: 0;
+  line-height: inherit;
+}
+
 .devotion-page {
   --brand: 0.309 0.072 261;
   --brand-strong: 0.309 0.072 261;
