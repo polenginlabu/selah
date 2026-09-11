@@ -25,6 +25,10 @@ import { Logo } from './Logo'
 import { isAdminEmail } from '../data/admin'
 import { useAssistant } from '../context/AssistantContext'
 import { StudyAssistant } from './StudyAssistant'
+import { ExternalChat } from './ExternalChat'
+
+// Flip to true to bring our own Scripture assistant back.
+const SHOW_STUDY_ASSISTANT = false
 
 export function Layout() {
   const { user, logout } = useAuth()
@@ -81,18 +85,24 @@ export function Layout() {
         <Outlet />
       </main>
 
-      {/* Global assistant: available on every page, and aware of the passage
-          the current page published (if any). Sits above the bottom nav. */}
-      <button
-        onClick={() => setAssistantOpen(true)}
-        aria-label="Ask the study assistant"
-        className="fixed bottom-[calc(5.25rem+env(safe-area-inset-bottom))] right-4 z-sticky flex h-12 w-12 items-center justify-center rounded-full bg-brand-strong text-on-brand shadow-glow transition-transform active:scale-90"
-      >
-        <ChatIcon width={19} height={19} />
-      </button>
-      {assistantOpen && (
-        <StudyAssistant passage={assistantPassage} onClose={() => setAssistantOpen(false)} />
+      {/* Our own study assistant is hidden while the Zackion widget is in use.
+          Everything behind it — Edge Function, prompt stack, crisis handling —
+          is untouched, so flipping this back on is a one-line change. */}
+      {SHOW_STUDY_ASSISTANT && (
+        <>
+          <button
+            onClick={() => setAssistantOpen(true)}
+            aria-label="Ask the study assistant"
+            className="fixed bottom-[calc(5.25rem+env(safe-area-inset-bottom))] right-4 z-sticky flex h-12 w-12 items-center justify-center rounded-full bg-brand-strong text-on-brand shadow-glow transition-transform active:scale-90"
+          >
+            <ChatIcon width={19} height={19} />
+          </button>
+          {assistantOpen && (
+            <StudyAssistant passage={assistantPassage} onClose={() => setAssistantOpen(false)} />
+          )}
+        </>
       )}
+      <ExternalChat />
 
       <div className="fixed inset-x-0 bottom-0 z-sticky mx-auto max-w-xl">
         <nav
