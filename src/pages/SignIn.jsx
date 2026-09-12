@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import {
   GoogleIcon,
-  FacebookIcon,
   PencilIcon,
   BookOpenIcon,
   SproutIcon,
@@ -97,30 +96,21 @@ export function SignIn() {
           Selah is a devotional and discipleship app for your local church — read the Word, journal
           what it stirs, and walk with the people you are discipling.
         </p>
-        <div className="mt-7 space-y-2">
-          <button
-            onClick={() => handleSignIn('google')}
-            disabled={!!loading}
-            className="btn-outline w-full disabled:opacity-60"
-          >
-            <GoogleIcon />
-            {loading === 'google' ? 'Signing in…' : 'Continue with Google'}
-          </button>
-          <button
-            onClick={() => handleSignIn('facebook')}
-            disabled={!!loading}
-            className="btn-outline w-full disabled:opacity-60"
-          >
-            <FacebookIcon width={18} height={18} className="text-[#1877F2]" />
-            {loading === 'facebook' ? 'Signing in…' : 'Continue with Facebook'}
-          </button>
-        </div>
+        {/* Google only. Facebook login was built and then shelved: Meta requires
+            business verification to publish an app that reads a user's email,
+            and that route was blocked at the account level. The signIn(provider)
+            plumbing below is unchanged, so re-adding a button here is all it
+            would take. */}
+        <button
+          onClick={() => handleSignIn('google')}
+          disabled={!!loading}
+          className="btn-outline mt-7 w-full disabled:opacity-60"
+        >
+          <GoogleIcon />
+          {loading === 'google' ? 'Signing in…' : 'Continue with Google'}
+        </button>
         {error && <p className="mt-4 text-sm text-red-500">{error}</p>}
-        <p className="mt-3 text-[0.7rem] text-muted text-pretty">
-          Use the same one each time — signing in with a different provider under a different email
-          creates a separate account.
-        </p>
-        <p className="mt-2 text-[0.7rem] text-muted">
+        <p className="mt-3 text-[0.7rem] text-muted">
           Free to use. We only ever see your name, email and profile picture.
         </p>
       </section>
