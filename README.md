@@ -143,6 +143,7 @@ Supabase tables used by the client:
 | --- | --- |
 | `profiles` | User profile data |
 | `user_stats` | XP, level, streak, totals |
+| `daily_devotions` | Generated daily SELAH devotion per user per day |
 | `devotions` | Journal entries with verse and translation |
 | `conquest_weeks` | Weekly conquest checklist state |
 | `conquest_recurring` | Recurring conquest task config |
@@ -155,7 +156,29 @@ Supabase tables used by the client:
 | `device_tokens` | FCM tokens per user |
 | `notification_profiles` | Per-user timezone for reminder scheduling |
 
-Edge Function: `send-test-conquest-reminder`.
+Edge Function: `send-test-conquest-reminder`, `daily-devotion`.
+
+---
+
+## Daily devotional engine
+
+On the first open of a new day, the Home screen asks the `daily-devotion` Edge Function to write a SELAH devotion for that day — a topic, a real Scripture passage (fetched and quoted verbatim from `bible-api.com`), a short teaching, paraphrased insights from a curated library of Rick Warren / Vlad Savchuk / Oriel Ballano summaries, reflection questions, an application, a prayer, and a "be still" prompt.
+
+Two design rules keep it safe and useful:
+
+- **Random + intentional.** The topic is chosen at random from ~21 topics, but topics covered in the last 7 days are excluded and under-covered topics carry more weight, so the list is walked evenly instead of clustering.
+- **Bible first, teachers second.** The Bible is the authority; the teacher notes are labeled summaries and are never quoted verbatim or presented as Scripture. The verse text the model is allowed to quote is fetched and verified, never left to model memory.
+
+The generated devotion is stored per user per day in `daily_devotions` and served straight from the DB on every later visit. Deleting today's row regenerates it.
+
+### Deploying
+
+```bash
+supabase db push                        # applies supabase/migrations/20260914_daily_devotions.sql
+supabase functions deploy daily-devotion
+```
+
+The function reuses the study assistant's OpenAI-compatible endpoint and reads `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and optionally `DEVOTION_MODEL` (defaults to `CHAT_MODEL`, then `gpt-4o-mini`) — the first two are already set if the study assistant is live. Re-deploy whenever `prompt.ts` or `topics.ts` changes. The topic picker is covered by `supabase/functions/daily-devotion/topics.test.ts`.
 
 ---
 

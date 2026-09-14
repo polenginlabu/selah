@@ -5,6 +5,7 @@ import { useToast } from '../context/ToastContext'
 import { subscribeToUserStats } from '../data/userStats'
 import { DEVOTION_METHOD_LABELS, getDevotionMeta, getDevotionsByDate, subscribeToDevotions } from '../data/devotions'
 import { getVerseOfTheDay } from '../data/votd'
+import { getTodayDevotion } from '../data/dailyDevotion'
 import { getMeditationSettings, setMeditationFocusWord, setMeditationPreferences } from '../data/meditation'
 import { enableNotifications } from '../lib/firebase'
 import { currentStreak, formatDateLong, formatDateShort, formatMonthYear, lastNDays, todayISO, weekdayLetter } from '../lib/date'
@@ -26,6 +27,9 @@ export function Home() {
   const [query, setQuery] = useState('')
   const [verse, setVerse] = useState(null)
   const [lastYearEntry, setLastYearEntry] = useState(null)
+  const [dailyDevotion, setDailyDevotion] = useState(null)
+  const [dailyDevotionError, setDailyDevotionError] = useState(null)
+  const [dailyDevotionReload, setDailyDevotionReload] = useState(0)
 
   useEffect(() => {
     if (user) return subscribeToUserStats(user.id, setStats)
@@ -38,6 +42,29 @@ export function Home() {
   useEffect(() => {
     if (user) getDevotionMeta(user.id).then(setMeta)
   }, [user, devotions])
+
+  useEffect(() => {
+    if (!user) return
+    let alive = true
+    const load = () => {
+      setDailyDevotionError(null)
+      getTodayDevotion(user.id)
+        .then((devotion) => {
+          if (alive) setDailyDevotion(devotion)
+        })
+        .catch((err) => {
+          if (alive) {
+            console.error('daily devotion failed', err)
+            setDailyDevotion(null)
+            setDailyDevotionError('Today\'s devotion could not be written just yet.')
+          }
+        })
+    }
+    load()
+    return () => {
+      alive = false
+    }
+  }, [user, dailyDevotionReload])
 
   useEffect(() => {
     getVerseOfTheDay().then(setVerse)
@@ -149,6 +176,19 @@ export function Home() {
         )}
       </header>
 
+      {user && (
+        <DailyDevotionCard
+          devotion={dailyDevotion}
+          error={dailyDevotionError}
+          doneToday={doneToday}
+          onRetry={() => {
+            setDailyDevotion(null)
+            setDailyDevotionError(null)
+            setDailyDevotionReload((n) => n + 1)
+          }}
+        />
+      )}
+
       {verse && <VerseOfTheDayCard verse={verse} doneToday={doneToday} />}
 
       {user && <MeditateCard uid={user.id} />}
@@ -244,6 +284,152 @@ export function Home() {
       {!reachedLimit && devotions !== null && devotions.length > PAGE_SIZE && !isFiltering && (
         <p className="pb-2 text-center text-xs font-medium text-muted">You've reached your very first entry</p>
       )}
+    </div>
+  )
+}
+
+function DailyDevotionCard({ devotion, error, doneToday, onRetry }) {
+  if (error) {
+    return (
+      <section
+        aria-label="Daily devotional"
+        className="animate-rise card flex items-center justify-between gap-3"
+      >
+        <div>
+          <p className="eyebrow">Selah — daily devotional</p>
+          <p className="mt-1.5 text-sm text-muted">{error}</p>
+        </div>
+        <button onClick={onRetry} className="btn-ghost shrink-0 px-3 py-1.5 text-sm">
+          Retry
+        </button>
+      </section>
+    )
+  }
+
+  if (!devotion) {
+    return (
+      <section aria-label="Daily devotional" className="animate-rise card">
+        <p className="eyebrow flex items-center gap-2">
+          <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-line border-t-brand" />
+          Writing today's devotion…
+        </p>
+        <div className="mt-3 space-y-2.5" aria-hidden="true">
+          <div className="h-5 w-2/3 animate-pulse rounded-md bg-raised" />
+          <div className="h-5 w-1/2 animate-pulse rounded-md bg-raised" />
+          <div className="h-3.5 w-full animate-pulse rounded-md bg-raised" />
+          <div className="h-3.5 w-5/6 animate-pulse rounded-md bg-raised" />
+        </div>
+      </section>
+    )
+  }
+
+  const verseForJournal = {
+    reference: devotion.keyScripture,
+    text: devotion.keyScriptureText,
+    translation: devotion.keyScriptureTranslation,
+  }
+
+  return (
+    <section
+      aria-label="Daily devotional"
+      className="animate-rise overflow-hidden rounded-2xl border border-brand/25 bg-brand-wash shadow-soft"
+    >
+      <div className="p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="eyebrow text-brand-strong dark:text-brand">Selah — daily devotional</p>
+          <span className="chip-brand">{devotion.topic.label}</span>
+        </div>
+        <h2 className="mt-2 font-sans text-xl font-semibold leading-snug tracking-tight text-balance">
+          {devotion.title}
+        </h2>
+
+        <blockquote className="mt-4 rounded-xl bg-surface/70 p-4">
+          <p className="text-sm font-semibold text-accent-ink">{devotion.keyScripture}</p>
+          <p className="mt-1.5 font-sans text-[1.0625rem] italic leading-relaxed text-ink/90 text-pretty">
+            "{devotion.keyScriptureText || "…"}"
+          </p>
+        </blockquote>
+
+        <div className="mt-5 space-y-5">
+          <DevotionSection label="The thought">
+            <p className="text-ink/90 text-pretty">{devotion.thought}</p>
+          </DevotionSection>
+
+          <DevotionSection label="What Scripture teaches">
+            <p className="text-ink/90 text-pretty">{devotion.teaches}</p>
+          </DevotionSection>
+
+          {devotion.trustedTeachers.length > 0 && (
+            <DevotionSection label="From trusted teachers">
+              <ul className="space-y-3">
+                {devotion.trustedTeachers.map((entry, index) => (
+                  <li key={index}>
+                    <p className="text-sm font-semibold text-brand-strong dark:text-brand">
+                      {entry.teacher}
+                    </p>
+                    <p className="mt-0.5 text-sm leading-relaxed text-ink/90 text-pretty">
+                      {entry.point}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            </DevotionSection>
+          )}
+
+          {devotion.questions.length > 0 && (
+            <DevotionSection label="Ask yourself">
+              <ol className="space-y-2.5">
+                {devotion.questions.map((question, index) => (
+                  <li key={index} className="flex gap-2.5 text-ink/90 text-pretty">
+                    <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-raised text-xs font-semibold text-brand-strong dark:text-brand">
+                      {index + 1}
+                    </span>
+                    <span className="text-sm leading-relaxed">{question}</span>
+                  </li>
+                ))}
+              </ol>
+            </DevotionSection>
+          )}
+
+          <DevotionSection label="Today's application">
+            <p className="text-ink/90 text-pretty">{devotion.application}</p>
+          </DevotionSection>
+
+          <DevotionSection label="Pray">
+            <p className="font-sans italic leading-relaxed text-ink/90 text-pretty">
+              {devotion.prayer}
+            </p>
+          </DevotionSection>
+
+          {devotion.selah && (
+            <div className="rounded-xl bg-surface/70 p-4 text-center">
+              <p className="eyebrow text-brand-strong dark:text-brand">Pause & be still</p>
+              <p className="mt-1.5 font-sans italic leading-relaxed text-ink/90 text-pretty">
+                {devotion.selah}
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-brand/15 bg-brand-wash px-5 py-3.5">
+        <p className="text-xs font-medium text-muted">New topic, new devotion every morning.</p>
+        <Link to="/devotion/new" state={{ verse: verseForJournal }} className="btn-ghost px-3 py-1.5 text-sm">
+          Journal this verse
+        </Link>
+      </div>
+
+      {/* Micro-copy for screen readers: the devotion is meant to lead into writing one. */}
+      {doneToday && <span className="sr-only">You've already journaled today.</span>}
+    </section>
+  )
+}
+
+function DevotionSection({ label, children }) {
+  return (
+    <div>
+      <p className="text-xs font-semibold uppercase tracking-[0.08em] text-muted">{label}</p>
+      <div className="mt-1.5 text-sm leading-relaxed">{children}</div>
     </div>
   )
 }

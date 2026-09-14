@@ -1,8 +1,9 @@
 import { Suspense, lazy } from 'react'
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { DotLottieReact } from '@lottiefiles/dotlottie-react'
 import { useAuth } from './context/AuthContext'
 import { Layout } from './components/Layout'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { Home } from './pages/Home'
 import { SignIn } from './pages/SignIn'
 import splashAnimation from './assets/sailing-boat.lottie'
@@ -32,7 +33,13 @@ function RouteLoadingSpinner() {
 function SplashScreen() {
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-5 px-6 text-center">
-      <DotLottieReact src={splashAnimation} autoplay loop backgroundColor="transparent" className="h-40 w-40" />
+      <DotLottieReact
+        src={splashAnimation}
+        autoplay
+        loop
+        backgroundColor="transparent"
+        className="h-40 w-40"
+      />
     </div>
   )
 }
@@ -74,17 +81,30 @@ function AuthedApp() {
   )
 }
 
+/**
+ * Second boundary, inside the router. The one in main.jsx is a last resort and
+ * cannot see navigation; this one takes the current path as its reset key, so
+ * a page that throws clears itself the moment you navigate elsewhere instead
+ * of wedging the whole session.
+ */
+function RoutedErrorBoundary({ children }) {
+  const location = useLocation()
+  return <ErrorBoundary routeKey={location.pathname}>{children}</ErrorBoundary>
+}
+
 export function App() {
   return (
-    <Routes>
-      {/* PUBLIC, deliberately. Google will not accept a privacy policy URL it
+    <RoutedErrorBoundary>
+      <Routes>
+        {/* PUBLIC, deliberately. Google will not accept a privacy policy URL it
           cannot reach, and a visitor deciding whether to sign in shouldn't have
           to sign in first to read how their data is handled. These sit ahead of
           the auth gate for that reason. */}
-      <Route path="/privacy" element={withSuspense(<PrivacyPolicy />)} />
-      <Route path="/terms" element={withSuspense(<TermsOfService />)} />
-      <Route path="/data-deletion" element={withSuspense(<DataDeletion />)} />
-      <Route path="*" element={<AuthedApp />} />
-    </Routes>
+        <Route path="/privacy" element={withSuspense(<PrivacyPolicy />)} />
+        <Route path="/terms" element={withSuspense(<TermsOfService />)} />
+        <Route path="/data-deletion" element={withSuspense(<DataDeletion />)} />
+        <Route path="*" element={<AuthedApp />} />
+      </Routes>
+    </RoutedErrorBoundary>
   )
 }

@@ -127,7 +127,13 @@ export default function Attendance() {
         // optimistic flip alone looks identical to an already-saved tap, which
         // is what makes people tap again on a slow connection.
         await pending.track(discipleId, () =>
-          upsertAttendance(discipleId, selectedService, sessionDate, present)
+          upsertAttendance(
+            discipleId,
+            selectedService,
+            sessionDate,
+            present,
+            disciples.find((d) => d.id === discipleId)?.name
+          )
         )
         setAttendanceCounts((prev) => {
           const delta = (present ? 1 : 0) - (previousPresent === true ? 1 : 0)
@@ -166,7 +172,7 @@ export default function Attendance() {
       return Array.from(byDiscipleId.values())
     })
     try {
-      await Promise.all(toMark.map((d) => upsertAttendance(d.id, selectedService, sessionDate, true)))
+      await Promise.all(toMark.map((d) => upsertAttendance(d.id, selectedService, sessionDate, true, d.name)))
       setAttendanceCounts((prev) => {
         const next = { ...prev }
         toMark.forEach((d) => {

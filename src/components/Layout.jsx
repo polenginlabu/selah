@@ -25,6 +25,7 @@ import { Logo } from './Logo'
 import { isAdminEmail } from '../data/admin'
 import { useAssistant } from '../context/AssistantContext'
 import { StudyAssistant } from './StudyAssistant'
+import { SyncStatus } from './SyncStatus'
 import { ExternalChat } from './ExternalChat'
 
 // Flip to true to bring our own Scripture assistant back.
@@ -102,6 +103,7 @@ export function Layout() {
           )}
         </>
       )}
+      <SyncStatus />
       <ExternalChat />
 
       <div className="fixed inset-x-0 bottom-0 z-sticky mx-auto max-w-xl">

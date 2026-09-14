@@ -12,7 +12,9 @@ const firebaseConfig = {
 const VAPID_KEY =
   'BEjlTXe1ODOh1IDAwc0T6exHRxMX5TQAZTsDp17t39Skz8wjWp82hqdjYXHDgtp7_TrKWqYHJyXqOjxerhY7VsU'
 
-const SERVICE_WORKER_PATH = '/firebase-messaging-sw.js'
+// The worker moved: caching and FCM now live in one file, because only one
+// worker can own scope "/". See lib/serviceWorker.js.
+import { getServiceWorkerRegistration } from './serviceWorker'
 
 const firebaseApp = initializeApp(firebaseConfig)
 const messagingPromise = isSupported().then((supported) =>
@@ -27,7 +29,7 @@ export async function enableNotifications(userId) {
   const permission = await Notification.requestPermission()
   if (permission !== 'granted') return permission === 'denied' ? 'denied' : 'unsupported'
 
-  await navigator.serviceWorker.register(SERVICE_WORKER_PATH)
+  await getServiceWorkerRegistration()
   const registration = await navigator.serviceWorker.ready
   const token = await getToken(messaging, {
     vapidKey: VAPID_KEY,
@@ -44,7 +46,7 @@ export async function enableNotifications(userId) {
 export async function disableNotifications(userId) {
   const messaging = await messagingPromise
   if (!messaging) return
-  const registration = await navigator.serviceWorker.getRegistration(SERVICE_WORKER_PATH)
+  const registration = await getServiceWorkerRegistration()
   if (!registration?.active) return
   const token = await getToken(messaging, {
     vapidKey: VAPID_KEY,

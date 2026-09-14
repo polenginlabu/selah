@@ -37,10 +37,19 @@ const RATE_LIMIT_PER_MINUTE = Number(Deno.env.get('CHAT_RATE_LIMIT') ?? '10')
 
 const CORS = {
   'Access-Control-Allow-Origin': Deno.env.get('CHAT_ALLOWED_ORIGIN') ?? '*',
-  'Access-Control-Allow-Headers': 'authorization, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   // §11.2: cross-origin JS cannot read these without being told to.
   'Access-Control-Expose-Headers': 'x-conversation-id, Retry-After',
+}
+
+// Reflect the preflight's requested headers instead of hardcoding a list: the
+// supabase-js client sends `x-client-info`, and a stale hardcoded list turns
+// into a browser CORS block. Same fix as daily-devotion.
+function corsHeaders(requestedHeaders: string | null): Record<string, string> {
+  return {
+    ...CORS,
+    'Access-Control-Allow-Headers': requestedHeaders ?? 'authorization, content-type, x-client-info',
+  }
 }
 
 function json(body: unknown, status = 200, extra: Record<string, string> = {}) {
@@ -52,7 +61,10 @@ function json(body: unknown, status = 200, extra: Record<string, string> = {}) {
 
 Deno.serve(async (req) => {
   // §3.1 — without this the browser preflight fails and nothing ever arrives.
-  if (req.method === 'OPTIONS') return new Response(null, { headers: CORS })
+  if (req.method === 'OPTIONS') {
+    const requestedHeaders = req.headers.get('Access-Control-Request-Headers')
+    return new Response(null, { headers: corsHeaders(requestedHeaders) })
+  }
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405)
 
   if (!BASE_URL || !API_KEY) {

@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase'
+import { enqueue, registerHandler } from '../lib/outbox'
 
 export const TIER_ORDER = ['first-timer', '2nd-timer', '3rd-timer', '4th-timer', 'regular']
 
@@ -76,7 +77,9 @@ export async function getAttendanceForServiceRange(service, startDate, endDate) 
   return (data ?? []).map(mapRecord)
 }
 
-export async function upsertAttendance(discipleId, service, sessionDate, present) {
+const ATTENDANCE_KIND = 'attendance.upsert'
+
+async function writeAttendance({ discipleId, service, sessionDate, present }) {
   const { error } = await supabase
     .from('attendance_records')
     .upsert(
@@ -84,6 +87,39 @@ export async function upsertAttendance(discipleId, service, sessionDate, present
       { onConflict: 'disciple_id,service,session_date' }
     )
   if (error) throw error
+}
+
+// Safe to replay: an upsert of an absolute value for a fixed key. Running it
+// twice leaves exactly the same row.
+registerHandler(ATTENDANCE_KIND, writeAttendance)
+
+/**
+ * Records attendance, queueing it when there is no connection.
+ *
+ * Marking a register is the one thing people do in buildings with no signal,
+ * so a failure here must never mean a lost tap.
+ */
+export async function upsertAttendance(discipleId, service, sessionDate, present, discipleName) {
+  const payload = { discipleId, service, sessionDate, present }
+  const label = `${discipleName ?? 'Someone'} — ${present ? 'present' : 'absent'} at ${service}`
+
+  if (!navigator.onLine) {
+    await enqueue(ATTENDANCE_KIND, payload, label)
+    return { queued: true }
+  }
+
+  try {
+    await writeAttendance(payload)
+    return { queued: false }
+  } catch (err) {
+    // Went offline between the check and the request, or the network dropped
+    // mid-flight. Queue rather than surface — it will land on reconnect.
+    if (!navigator.onLine || err?.message === 'Failed to fetch') {
+      await enqueue(ATTENDANCE_KIND, payload, label)
+      return { queued: true }
+    }
+    throw err
+  }
 }
 
 export async function getAttendanceCounts() {
