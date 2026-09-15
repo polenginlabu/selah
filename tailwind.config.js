@@ -42,12 +42,19 @@ export default {
           from: { opacity: '1', transform: 'scale(1)' },
           to: { opacity: '0', transform: 'scale(0.96)' },
         },
+        // Paces the Selah dots at roughly a resting breath, so the reader has
+        // something to breathe along with during the two-minute pause.
+        breathe: {
+          '0%, 100%': { opacity: '0.3', transform: 'scale(1)' },
+          '50%': { opacity: '1', transform: 'scale(1.4)' },
+        },
       },
       animation: {
         rise: 'rise 0.5s cubic-bezier(0.16, 1, 0.3, 1) both',
         'fade-in': 'fadeIn 200ms ease-out both',
         'sheet-up': 'sheetUp 320ms cubic-bezier(0.32, 0.72, 0, 1) both',
         'toast-out': 'fadeOut 180ms ease-in both',
+        breathe: 'breathe 3s ease-in-out infinite',
       },
       colors: {
         canvas: 'oklch(var(--canvas) / <alpha-value>)',
@@ -55,6 +62,8 @@ export default {
         raised: 'oklch(var(--raised) / <alpha-value>)',
         line: 'oklch(var(--line) / <alpha-value>)',
         ink: 'oklch(var(--ink) / <alpha-value>)',
+        // Dark-by-design panels that must NOT invert with the theme.
+        panel: 'oklch(var(--panel) / <alpha-value>)',
         muted: 'oklch(var(--muted) / <alpha-value>)',
         brand: 'oklch(var(--brand) / <alpha-value>)',
         'brand-strong': 'oklch(var(--brand-strong) / <alpha-value>)',

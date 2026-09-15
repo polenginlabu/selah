@@ -16,6 +16,11 @@ import { TRIBE_ICONS } from '../tribeIcons'
 const PAGE_SIZE = 20
 const LOAD_MORE_INCREMENT = 100
 
+// The daily SELAH devotional now leads the page and carries its own key
+// scripture, so the separate verse card was saying the same thing twice. Flip
+// to true to bring it back.
+const SHOW_VERSE_OF_THE_DAY = false
+
 export function Home() {
   const { user } = useAuth()
   const today = todayISO()
@@ -58,7 +63,7 @@ export function Home() {
   }, [user, devotions])
 
   useEffect(() => {
-    getVerseOfTheDay().then(setVerse)
+    if (SHOW_VERSE_OF_THE_DAY) getVerseOfTheDay().then(setVerse)
   }, [])
 
   useEffect(() => {
@@ -169,7 +174,7 @@ export function Home() {
 
       {user && <DailyDevotionCard devotion={dailyDevotion} doneToday={doneToday} />}
 
-      {verse && <VerseOfTheDayCard verse={verse} doneToday={doneToday} />}
+      {SHOW_VERSE_OF_THE_DAY && verse && <VerseOfTheDayCard verse={verse} doneToday={doneToday} />}
 
       {user && <MeditateCard uid={user.id} />}
 
@@ -297,133 +302,70 @@ function DailyDevotionCard({ devotion, doneToday }) {
     )
   }
 
-  const verseForJournal = {
-    reference: devotion.keyScripture,
-    text: devotion.keyScriptureText,
-    translation: devotion.keyScriptureTranslation,
-  }
+  // A teaser, not the devotional. The thought alone runs 500-800 words, and
+  // rendering all of it here buried the rest of the page under one card — the
+  // full reading lives at /daily.
+  const preview = firstParagraph(devotion.thought)
 
   return (
-    <section
-      aria-label="Daily devotional"
-      className="animate-rise overflow-hidden rounded-2xl border border-brand/25 bg-brand-wash shadow-soft"
+    <Link
+      to="/daily"
+      aria-label={`Read today's devotional: ${devotion.title}`}
+      className="animate-rise block overflow-hidden rounded-2xl border border-brand/25 bg-brand-wash shadow-soft transition-shadow hover:shadow-lift"
     >
       <div className="p-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="eyebrow text-brand-strong dark:text-brand">Selah — daily devotional</p>
           <span className="chip-brand">{devotion.topic.label}</span>
         </div>
-        <h2 className="mt-2 font-sans text-xl font-semibold leading-snug tracking-tight text-balance">
+
+        <h2 className="mt-2 font-display text-xl font-extrabold leading-snug tracking-tight text-balance">
           {devotion.title}
         </h2>
 
-        <blockquote className="mt-4 rounded-xl bg-surface/70 p-4">
-          <p className="text-sm font-semibold text-accent-ink">
-            {devotion.keyScripture}
-            {devotion.keyScriptureTranslation && (
-              <span className="ml-1.5 font-normal text-muted">({devotion.keyScriptureTranslation})</span>
-            )}
+        <p className="mt-2 text-sm font-semibold text-accent-ink">
+          {devotion.keyScripture}
+          {devotion.keyScriptureTranslation && (
+            <span className="ml-1.5 font-normal text-muted">({devotion.keyScriptureTranslation})</span>
+          )}
+        </p>
+
+        {preview && (
+          <p className="mt-3 line-clamp-3 font-sans text-[0.95rem] leading-relaxed text-muted text-pretty">
+            {preview}
           </p>
-          <p className="mt-1.5 font-sans text-[1.0625rem] italic leading-relaxed text-ink/90 text-pretty">
-            "{devotion.keyScriptureText || '…'}"
-          </p>
-          {devotion.supportingScriptures.length > 0 && (
-            <p className="mt-2.5 text-xs text-muted">
-              Also read: {devotion.supportingScriptures.join(' · ')}
-            </p>
-          )}
-        </blockquote>
-
-        <div className="mt-5 space-y-5">
-          <DevotionSection label="The thought">
-            <DevotionProse text={devotion.thought} />
-          </DevotionSection>
-
-          <DevotionSection label="What Scripture teaches">
-            <DevotionProse text={devotion.teaches} />
-          </DevotionSection>
-
-          {/* Honesty over polish: when the agent could not research, it says so
-              rather than letting the devotion imply that it did. */}
-          {devotion.researchNote && (
-            <p className="rounded-lg bg-surface/60 px-3 py-2 text-xs text-muted">{devotion.researchNote}</p>
-          )}
-
-          {devotion.questions.length > 0 && (
-            <DevotionSection label="Selah — pause and reflect">
-              <ol className="space-y-2.5">
-                {devotion.questions.map((question, index) => (
-                  <li key={index} className="flex gap-2.5 text-ink/90 text-pretty">
-                    <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-raised text-xs font-semibold text-brand-strong dark:text-brand">
-                      {index + 1}
-                    </span>
-                    <span className="text-sm leading-relaxed">{question}</span>
-                  </li>
-                ))}
-              </ol>
-            </DevotionSection>
-          )}
-
-          <DevotionSection label="Today's application">
-            <DevotionProse text={devotion.application} />
-          </DevotionSection>
-
-          <DevotionSection label="Pray">
-            <DevotionProse text={devotion.prayer} className="font-sans italic" />
-          </DevotionSection>
-
-          {devotion.selah && (
-            <div className="rounded-xl bg-surface/70 p-4 text-center">
-              <p className="eyebrow text-brand-strong dark:text-brand">Today's Selah</p>
-              <DevotionProse text={devotion.selah} className="mt-1.5 font-sans italic" />
-            </div>
-          )}
-        </div>
+        )}
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-brand/15 bg-brand-wash px-5 py-3.5">
-        <p className="text-xs font-medium text-muted">New topic, new devotion every morning.</p>
-        <Link to="/devotion/new" state={{ verse: verseForJournal }} className="btn-ghost px-3 py-1.5 text-sm">
-          Journal this verse
-        </Link>
+      <div className="flex items-center justify-between gap-3 border-t border-brand/15 px-5 py-3.5">
+        <span className="text-xs font-medium text-muted">
+          {readingMinutes(devotion)} min read · {devotion.questions.length} questions
+        </span>
+        <span className="btn-primary pointer-events-none px-3.5 py-1.5 text-sm">Read today's devotion</span>
       </div>
 
       {doneToday && <span className="sr-only">You've already journaled today.</span>}
-    </section>
+    </Link>
   )
+}
+
+/** The opening paragraph, for the teaser on the home feed. */
+function firstParagraph(text) {
+  if (!text) return ''
+  return String(text).split(/\n\s*\n/)[0].trim()
 }
 
 /**
- * The agent writes multi-paragraph prose — "the thought" alone runs 500-800
- * words. Rendering that into a single <p> collapses every blank line into an
- * unreadable wall, so split on blank lines and keep the shape the agent wrote.
+ * Rough reading time at ~200 wpm, counting every section the reader will
+ * actually move through rather than the thought alone.
  */
-function DevotionProse({ text, className = '' }) {
-  const paragraphs = String(text ?? '')
-    .split(/\n\s*\n/)
-    .map((paragraph) => paragraph.trim())
+function readingMinutes(devotion) {
+  const words = [devotion.thought, devotion.teaches, devotion.application, devotion.prayer, devotion.selah]
     .filter(Boolean)
-
-  if (paragraphs.length === 0) return null
-
-  return (
-    <div className={`space-y-2.5 ${className}`.trim()}>
-      {paragraphs.map((paragraph, index) => (
-        <p key={index} className="leading-relaxed text-ink/90 text-pretty">
-          {paragraph}
-        </p>
-      ))}
-    </div>
-  )
-}
-
-function DevotionSection({ label, children }) {
-  return (
-    <div>
-      <p className="text-xs font-semibold uppercase tracking-[0.08em] text-muted">{label}</p>
-      <div className="mt-1.5 text-sm leading-relaxed">{children}</div>
-    </div>
-  )
+    .join(' ')
+    .split(/\s+/)
+    .filter(Boolean).length
+  return Math.max(1, Math.round(words / 200))
 }
 
 function VerseOfTheDayCard({ verse, doneToday }) {

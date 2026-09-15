@@ -21,7 +21,11 @@ export default defineConfig({
       // index.html; generating a second one would compete with it.
       manifest: false,
       injectManifest: {
-        globPatterns: ['**/*.{js,css,html,png,svg,woff2,lottie}'],
+        // jpg/jpeg/webp are here for the devotional hero. Without them the
+        // image is bundled but never precached, so it is the one element that
+        // breaks when the installed app opens offline — which is the whole
+        // reason it is bundled rather than hot-linked.
+        globPatterns: ['**/*.{js,css,html,png,jpg,jpeg,webp,svg,woff2,lottie}'],
         // The Bible reader can pull a large chapter payload; the default 2 MiB
         // cap would silently drop assets from the precache.
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,

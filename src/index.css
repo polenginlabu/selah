@@ -18,6 +18,12 @@
   --accent-ink: 0.520 0.210 269;
   --on-brand: 1 0 0;
   --on-accent: 0.226 0.056 262;
+  /* A deliberately NON-inverting navy, for panels that are meant to read as
+     dark in both themes — the devotional hero, scripture card, prayer and
+     Selah blocks. --ink cannot do this job: it is a text colour and flips to
+     near-white in dark mode, which turned those panels into white cards with
+     white text on them. */
+  --panel: 0.226 0.056 262;       /* #0D1B36 navy deep */
   color-scheme: light;
 }
 
@@ -38,6 +44,9 @@
   --accent-ink: 0.690 0.152 272;
   --on-brand: 1 0 0;
   --on-accent: 0.226 0.056 262;
+  /* Same navy as light mode on purpose — these panels are dark by design, not
+     by theme. Lifted a touch so it separates from the near-black canvas. */
+  --panel: 0.250 0.050 262;
   color-scheme: dark;
 }
 
@@ -190,5 +199,26 @@ input[type='datetime-local']::-webkit-datetime-edit-fields-wrapper {
   }
   .stagger > *:nth-child(5) {
     animation-delay: 0.2s;
+  }
+}
+
+/* Respect a reader who has asked their system to reduce motion.
+ *
+ * The Selah panel's breathing dots are the reason this became necessary: they
+ * loop indefinitely, and a looping animation is exactly what people with
+ * vestibular sensitivity turn this setting on to avoid. Applied globally
+ * rather than to that one component, because the app animates in a lot of
+ * places — page rises, staggered lists, the sheet, skeleton pulses.
+ *
+ * Animations are cut to a single near-instant pass rather than removed, so
+ * anything that relies on an animation's end state still reaches it. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

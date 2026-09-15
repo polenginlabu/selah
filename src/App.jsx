@@ -9,6 +9,7 @@ import { SignIn } from './pages/SignIn'
 import splashAnimation from './assets/sailing-boat.lottie'
 
 const DevotionEditor = lazy(() => import('./pages/DevotionEditor'))
+const DailyDevotion = lazy(() => import('./pages/DailyDevotion'))
 const BibleReader = lazy(() => import('./pages/BibleReader'))
 const ConquestWeek = lazy(() => import('./pages/ConquestWeek'))
 const Achievements = lazy(() => import('./pages/Achievements'))
@@ -73,6 +74,10 @@ function AuthedApp() {
         <Route path="leaderboard" element={withSuspense(<Leaderboard />)} />
         {/* Admin itself redirects non-admins; the RPCs it calls enforce this in Postgres. */}
         <Route path="admin" element={withSuspense(<Admin />)} />
+        {/* The shared SELAH devotional. Distinct from devotion/:id below, which
+            is the reader's own journal entry. */}
+        <Route path="daily" element={withSuspense(<DailyDevotion />)} />
+        <Route path="daily/:date" element={withSuspense(<DailyDevotion />)} />
         <Route path="devotion/new" element={withSuspense(<DevotionEditor />)} />
         <Route path="devotion/:id" element={withSuspense(<DevotionEditor />)} />
         <Route path="*" element={<Navigate to="/" replace />} />
