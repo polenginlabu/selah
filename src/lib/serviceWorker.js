@@ -16,6 +16,11 @@ let registrationPromise = null
 
 export function registerServiceWorker({ onUpdateReady } = {}) {
   if (!('serviceWorker' in navigator)) return Promise.resolve(null)
+  // vite-plugin-pwa only emits /sw.js on a real build (devOptions is off), so
+  // in `vite dev` that path falls through to the SPA index.html and the
+  // browser rejects the registration for its text/html MIME type. Nothing to
+  // register in dev — skip rather than throw a SecurityError on every boot.
+  if (import.meta.env.DEV) return Promise.resolve(null)
   if (registrationPromise) return registrationPromise
 
   registrationPromise = (async () => {

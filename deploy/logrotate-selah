@@ -1,0 +1,22 @@
+# Log rotation for the SELAH services.
+#
+# Without this the logs grow forever: the services append to them on every
+# restart and the nightly run adds a few hundred lines a day. On a small VPS
+# that is a slow disk leak, and a full disk takes the whole app down.
+#
+#   sudo cp deploy/logrotate-selah /etc/logrotate.d/selah
+#   sudo logrotate --debug /etc/logrotate.d/selah    # dry run, changes nothing
+/var/log/selah/*.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 selah selah
+
+    # The services hold their log files open, so the rotated file would keep
+    # receiving writes. copytruncate rotates a copy and truncates the original
+    # in place, which needs no restart and loses nothing but a line or two.
+    copytruncate
+}

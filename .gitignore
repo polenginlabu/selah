@@ -1,6 +1,30 @@
+# Dependencies and build output
 node_modules
 dist
+
+# Secrets. .env.local holds the Supabase service-role key, which bypasses every
+# RLS policy — it must never be committed. .env.local.example is the template
+# and IS committed.
 .env
+.env.local
+.db-url
+
+# Supabase CLI local state. Not just noise: .temp/pooler-url contains a
+# Postgres connection string including the database password.
+supabase/.temp/
+**/supabase/.temp/
+
+# Generator artifacts. .selah-debug holds agent output that failed validation,
+# kept locally so a bad run can be diagnosed without paying for another.
+.selah-debug/
+backend/bridge/opencode-bridge/devotional-output.json
+
+# Local agent/editor tooling. These are generic skill libraries rather than
+# anything specific to this app, and .claude/skills is only symlinks into
+# .agents/skills. Delete these two lines if you want the team to share them.
+.agents/
+.claude/
+
+# OS and tooling noise
 .DS_Store
 deno.lock
-.db-url

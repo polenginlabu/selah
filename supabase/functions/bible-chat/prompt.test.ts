@@ -7,6 +7,7 @@ import { assert, assertEquals, assertStringIncludes } from 'https://deno.land/st
 import {
   CRISIS_SAFE_REPLY,
   buildSystemPrompt,
+  shapeDirective,
   classifyTurn,
   crisisDirective,
   isCrisisTurn,
@@ -152,4 +153,38 @@ Deno.test('crisis safe reply is self-contained and names real help', () => {
   assertStringIncludes(CRISIS_SAFE_REPLY, 'not a person')
   // Must not exposit a passage — that is the failure mode it exists to prevent.
   assertEquals(/verse|psalm|scripture says/i.test(CRISIS_SAFE_REPLY), false)
+})
+
+// --- Reply shape ------------------------------------------------------------
+
+for (const text of [
+  "i'm anxious about work",
+  'i feel so lonely lately',
+  'how do i forgive my brother',
+  'why does god allow suffering',
+  'i keep failing the same temptation',
+]) {
+  Deno.test(`shape fires for pastoral: "${text.slice(0, 40)}"`, () => {
+    assert(shapeDirective(text) !== null, 'pastoral question got no shape')
+  })
+}
+
+for (const text of ['who wrote this psalm?', 'what does selah mean', 'when was this written']) {
+  Deno.test(`shape does NOT fire for factual: "${text.slice(0, 40)}"`, () => {
+    assertEquals(shapeDirective(text), null, 'factual lookup should stay a plain answer')
+  })
+}
+
+Deno.test('shape never fires on a crisis turn', () => {
+  // Two competing shapes in one prompt gets you neither, and the crisis
+  // directive forbids a devotional answer outright.
+  assertEquals(shapeDirective('i want to die'), null)
+  assertEquals(shapeDirective('my husband hits me'), null)
+})
+
+Deno.test('crisis directive still comes after the shape directive', () => {
+  const prompt = buildSystemPrompt("i'm anxious and i want to die", PASSAGE)
+  assertStringIncludes(prompt, 'THIS TURN ONLY — HIGHEST PRIORITY')
+  // The shape must not have been added alongside it.
+  assertEquals(prompt.includes('Selah — one line to sit with'), false)
 })

@@ -1,0 +1,158 @@
+name: Daily devotion
+
+# Generates one SELAH devotion for the day and writes it to Supabase.
+#
+# The whole agent stack — `opencode serve` and the bridge — is started inside
+# the runner, used, and thrown away with it. Nothing persistent runs anywhere:
+# no systemd on Hostinger, no port exposed to the internet, no process to
+# supervise. Hostinger only serves the built site, which reads the row.
+#
+# Required repository secrets (Settings > Secrets and variables > Actions):
+#   OPENCODE_AUTH_JSON          contents of ~/.local/share/opencode/auth.json
+#                               from a machine where `opencode auth login` has
+#                               been run. Holds a live API key.
+#   SUPABASE_SERVICE_ROLE_KEY   Supabase > Project Settings > API > service_role.
+#                               Bypasses every RLS policy; only this job uses it.
+#   VITE_SUPABASE_URL           already set for the deploy workflow; reused here.
+
+on:
+  schedule:
+    # GitHub cron is UTC. 19:00 UTC = 03:00 Asia/Manila the next day, which is
+    # the hour the devotion is dated for and early enough to be waiting before
+    # anyone opens the app.
+    #
+    # Scheduled runs can be delayed by GitHub during busy periods, sometimes by
+    # an hour or more. That is fine here: the generator dates the devotion in
+    # Asia/Manila rather than from the clock at run time, and is idempotent by
+    # date, so a late run still produces the right day's devotion and a double
+    # run produces nothing.
+    - cron: '0 19 * * *'
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'Date to generate (YYYY-MM-DD). Blank = today in Asia/Manila.'
+        required: false
+        type: string
+      model:
+        description: 'Override the model, e.g. opencode/claude-sonnet-4-6'
+        required: false
+        type: string
+      force:
+        description: "Replace the day's devotion if one already exists"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Never let two runs generate at once: each costs several minutes of agent
+# research, and the second would be discarded anyway.
+concurrency:
+  group: daily-devotion
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    # A normal run takes 3-5 minutes. This is a backstop against a wedged agent
+    # holding a runner for six hours, not a target.
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm ci --prefix backend/bridge/opencode-bridge
+
+      # ~150 MB binary. Caching keeps the nightly run quick and removes a
+      # download that would otherwise be a nightly chance to fail.
+      - name: Cache OpenCode
+        id: cache-opencode
+        uses: actions/cache@v4
+        with:
+          path: ~/.opencode
+          key: opencode-${{ runner.os }}-v1
+
+      - name: Install OpenCode
+        if: steps.cache-opencode.outputs.cache-hit != 'true'
+        run: curl -fsSL https://opencode.ai/install | bash
+
+      - name: Put OpenCode on PATH
+        run: echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+
+      # Credentials are found via $HOME. Without this the agent starts fine and
+      # every model returns an EMPTY reply rather than an auth error, which is
+      # the single most confusing failure in this stack.
+      - name: Restore OpenCode credentials
+        env:
+          OPENCODE_AUTH_JSON: ${{ secrets.OPENCODE_AUTH_JSON }}
+        run: |
+          if [ -z "$OPENCODE_AUTH_JSON" ]; then
+            echo "::error::OPENCODE_AUTH_JSON secret is not set. Copy ~/.local/share/opencode/auth.json from a logged-in machine."
+            exit 1
+          fi
+          mkdir -p ~/.local/share/opencode
+          printf '%s' "$OPENCODE_AUTH_JSON" > ~/.local/share/opencode/auth.json
+          chmod 600 ~/.local/share/opencode/auth.json
+          opencode auth list
+
+      - name: Start OpenCode and the bridge
+        run: |
+          set -eu
+          opencode serve --port 4097 --hostname 127.0.0.1 > /tmp/opencode.log 2>&1 &
+          ( cd backend/bridge/opencode-bridge && \
+            OPENCODE_ROOT_PATH="$GITHUB_WORKSPACE" BRIDGE_HOST=127.0.0.1 \
+            node server.js > /tmp/bridge.log 2>&1 & )
+
+          # Wait for the bridge's COMPOSITE health: it reports OpenCode's state
+          # too, and a healthy bridge in front of a dead OpenCode is exactly the
+          # state that produces silent empty replies.
+          for i in $(seq 1 60); do
+            if curl -fsS -m 5 http://127.0.0.1:4098/api/health 2>/dev/null | grep -q '"success":true'; then
+              echo "bridge and opencode are ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "::error::bridge/opencode did not become healthy in 60s"
+          echo "--- opencode.log ---"; cat /tmp/opencode.log || true
+          echo "--- bridge.log ---";   cat /tmp/bridge.log   || true
+          exit 1
+
+      - name: Generate today's devotion
+        env:
+          SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          BRIDGE_URL: http://127.0.0.1:4098
+        run: |
+          ARGS=""
+          [ -n "${{ inputs.date }}" ]  && ARGS="$ARGS --date ${{ inputs.date }}"
+          [ -n "${{ inputs.model }}" ] && ARGS="$ARGS --model ${{ inputs.model }}"
+          [ "${{ inputs.force }}" = "true" ] && ARGS="$ARGS --force"
+          # shellcheck disable=SC2086
+          node scripts/generate-daily-devotion.js $ARGS
+
+      # Agent output that failed validation. Keeps a bad night diagnosable
+      # without paying for another research run.
+      - name: Upload rejected output
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selah-debug-${{ github.run_id }}
+          path: |
+            .selah-debug/
+            /tmp/opencode.log
+            /tmp/bridge.log
+          if-no-files-found: ignore
+          retention-days: 14

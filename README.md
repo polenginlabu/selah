@@ -180,6 +180,24 @@ supabase functions deploy daily-devotion
 
 The function reuses the study assistant's OpenAI-compatible endpoint and reads `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and optionally `DEVOTION_MODEL` (defaults to `CHAT_MODEL`, then `gpt-4o-mini`) — the first two are already set if the study assistant is live. Re-deploy whenever `prompt.ts` or `topics.ts` changes. The topic picker is covered by `supabase/functions/daily-devotion/topics.test.ts`.
 
+**Model choice on OpenCode Zen.** Free "stealth" models like `big-pickle` only work inside OpenCode itself (their free tier requires an OpenCode session ID); a bare API call from an Edge Function is rejected with HTTP 400 `MissingSessionID`. Use a paid Zen model id instead — e.g. `deepseek-v4-flash` (chat) and `deepseek-v4-pro` (devotion), both on `https://opencode.ai/zen/v1` with the key from `opencode.ai/auth`.
+
+### Generating the devotion locally (the Big Pickle path)
+
+Because `big-pickle` free tier only runs inside an OpenCode session, it can't be the Edge Function's model — but a local script can open that session for you. `scripts/generate-daily-devotion.js` reuses the exact same topic picker and prompt (`topics.ts` / `prompt.ts`, loaded with Node's TS type-stripping), fetches the anchor verse, and then generates the devotion with `opencode run -m opencode/big-pickle`. It writes the finished row straight into `daily_devotions` with the service-role key, so the app serves it like any other.
+
+```bash
+cp .env.local.example .env.local   # then fill in the three values
+npm run devotion:generate          # picks topic, generates, saves today's row
+npm run devotion:dry-run           # same, but prints instead of saving (needs no credentials)
+```
+
+`.env.local` is gitignored; the service-role key comes from Supabase → Project Settings → API. Scope is one user by email via `auth.admin.listUsers`. Tests and `--dry-run` run the whole pipeline without writing (today: 6/6 topic tests pass).
+
+Trade-offs: a machine has to be running with opencode installed when the devotion is generated, and Big Pickle's free tier records its sessions, so it's fitting for a personal devotional — use the paid Zen models for anything confidential. If the Edge Functions are already deployed with `deepseek-v4-pro`, both paths can coexist; the first row written wins per `(user_id, date)`.
+
+Automation: a macOS LaunchAgent can run it daily, e.g. with `StartCalendarInterval Hour:6 Minute:50` and a zsh program of `cd "/path/to/selah-app" && node --experimental-strip-types scripts/generate-daily-devotion.js`. The script is idempotent, so an extra invocation is harmless.
+
 ---
 
 ## Notifications

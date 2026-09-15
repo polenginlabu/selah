@@ -29,7 +29,10 @@ export async function enableNotifications(userId) {
   const permission = await Notification.requestPermission()
   if (permission !== 'granted') return permission === 'denied' ? 'denied' : 'unsupported'
 
-  await getServiceWorkerRegistration()
+  // No worker is registered in dev (see lib/serviceWorker.js), and
+  // `serviceWorker.ready` never settles when there is nothing to wait for —
+  // so bail instead of hanging the caller's await forever.
+  if (!(await getServiceWorkerRegistration())) return 'unsupported'
   const registration = await navigator.serviceWorker.ready
   const token = await getToken(messaging, {
     vapidKey: VAPID_KEY,

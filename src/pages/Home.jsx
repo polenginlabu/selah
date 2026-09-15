@@ -4,8 +4,8 @@ import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 import { subscribeToUserStats } from '../data/userStats'
 import { DEVOTION_METHOD_LABELS, getDevotionMeta, getDevotionsByDate, subscribeToDevotions } from '../data/devotions'
-import { getVerseOfTheDay } from '../data/votd'
 import { getTodayDevotion } from '../data/dailyDevotion'
+import { getVerseOfTheDay } from '../data/votd'
 import { getMeditationSettings, setMeditationFocusWord, setMeditationPreferences } from '../data/meditation'
 import { enableNotifications } from '../lib/firebase'
 import { currentStreak, formatDateLong, formatDateShort, formatMonthYear, lastNDays, todayISO, weekdayLetter } from '../lib/date'
@@ -27,12 +27,26 @@ export function Home() {
   const [query, setQuery] = useState('')
   const [verse, setVerse] = useState(null)
   const [lastYearEntry, setLastYearEntry] = useState(null)
-  const [dailyDevotion, setDailyDevotion] = useState(null)
-  const [dailyDevotionError, setDailyDevotionError] = useState(null)
-  const [dailyDevotionReload, setDailyDevotionReload] = useState(0)
+  const [dailyDevotion, setDailyDevotion] = useState(undefined) // undefined = loading, null = none yet
 
   useEffect(() => {
     if (user) return subscribeToUserStats(user.id, setStats)
+  }, [user])
+
+  useEffect(() => {
+    if (!user) return
+    let alive = true
+    getTodayDevotion()
+      .then((devotion) => {
+        if (alive) setDailyDevotion(devotion)
+      })
+      .catch((err) => {
+        console.error('daily devotion failed', err)
+        if (alive) setDailyDevotion(null)
+      })
+    return () => {
+      alive = false
+    }
   }, [user])
 
   useEffect(() => {
@@ -42,29 +56,6 @@ export function Home() {
   useEffect(() => {
     if (user) getDevotionMeta(user.id).then(setMeta)
   }, [user, devotions])
-
-  useEffect(() => {
-    if (!user) return
-    let alive = true
-    const load = () => {
-      setDailyDevotionError(null)
-      getTodayDevotion(user.id)
-        .then((devotion) => {
-          if (alive) setDailyDevotion(devotion)
-        })
-        .catch((err) => {
-          if (alive) {
-            console.error('daily devotion failed', err)
-            setDailyDevotion(null)
-            setDailyDevotionError('Today\'s devotion could not be written just yet.')
-          }
-        })
-    }
-    load()
-    return () => {
-      alive = false
-    }
-  }, [user, dailyDevotionReload])
 
   useEffect(() => {
     getVerseOfTheDay().then(setVerse)
@@ -176,18 +167,7 @@ export function Home() {
         )}
       </header>
 
-      {user && (
-        <DailyDevotionCard
-          devotion={dailyDevotion}
-          error={dailyDevotionError}
-          doneToday={doneToday}
-          onRetry={() => {
-            setDailyDevotion(null)
-            setDailyDevotionError(null)
-            setDailyDevotionReload((n) => n + 1)
-          }}
-        />
-      )}
+      {user && <DailyDevotionCard devotion={dailyDevotion} doneToday={doneToday} />}
 
       {verse && <VerseOfTheDayCard verse={verse} doneToday={doneToday} />}
 
@@ -288,37 +268,31 @@ export function Home() {
   )
 }
 
-function DailyDevotionCard({ devotion, error, doneToday, onRetry }) {
-  if (error) {
+function DailyDevotionCard({ devotion, doneToday }) {
+  // undefined = still fetching. Fast, because the row is only read — nothing
+  // is generated in the browser.
+  if (devotion === undefined) {
     return (
-      <section
-        aria-label="Daily devotional"
-        className="animate-rise card flex items-center justify-between gap-3"
-      >
-        <div>
-          <p className="eyebrow">Selah — daily devotional</p>
-          <p className="mt-1.5 text-sm text-muted">{error}</p>
+      <section aria-label="Daily devotional" className="animate-rise card">
+        <p className="eyebrow">Selah — daily devotional</p>
+        <div className="mt-3 space-y-2.5" aria-hidden="true">
+          <div className="h-5 w-2/3 animate-pulse rounded-md bg-raised" />
+          <div className="h-3.5 w-full animate-pulse rounded-md bg-raised" />
+          <div className="h-3.5 w-5/6 animate-pulse rounded-md bg-raised" />
         </div>
-        <button onClick={onRetry} className="btn-ghost shrink-0 px-3 py-1.5 text-sm">
-          Retry
-        </button>
       </section>
     )
   }
 
+  // No row for today: the generator has not run yet. That is a normal state,
+  // not an error, so this does not offer a retry the reader cannot act on.
   if (!devotion) {
     return (
       <section aria-label="Daily devotional" className="animate-rise card">
-        <p className="eyebrow flex items-center gap-2">
-          <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-line border-t-brand" />
-          Writing today's devotion…
+        <p className="eyebrow">Selah — daily devotional</p>
+        <p className="mt-1.5 text-sm text-muted">
+          Today's devotion isn't ready yet. It arrives each morning — check back shortly.
         </p>
-        <div className="mt-3 space-y-2.5" aria-hidden="true">
-          <div className="h-5 w-2/3 animate-pulse rounded-md bg-raised" />
-          <div className="h-5 w-1/2 animate-pulse rounded-md bg-raised" />
-          <div className="h-3.5 w-full animate-pulse rounded-md bg-raised" />
-          <div className="h-3.5 w-5/6 animate-pulse rounded-md bg-raised" />
-        </div>
       </section>
     )
   }
@@ -344,40 +318,39 @@ function DailyDevotionCard({ devotion, error, doneToday, onRetry }) {
         </h2>
 
         <blockquote className="mt-4 rounded-xl bg-surface/70 p-4">
-          <p className="text-sm font-semibold text-accent-ink">{devotion.keyScripture}</p>
-          <p className="mt-1.5 font-sans text-[1.0625rem] italic leading-relaxed text-ink/90 text-pretty">
-            "{devotion.keyScriptureText || "…"}"
+          <p className="text-sm font-semibold text-accent-ink">
+            {devotion.keyScripture}
+            {devotion.keyScriptureTranslation && (
+              <span className="ml-1.5 font-normal text-muted">({devotion.keyScriptureTranslation})</span>
+            )}
           </p>
+          <p className="mt-1.5 font-sans text-[1.0625rem] italic leading-relaxed text-ink/90 text-pretty">
+            "{devotion.keyScriptureText || '…'}"
+          </p>
+          {devotion.supportingScriptures.length > 0 && (
+            <p className="mt-2.5 text-xs text-muted">
+              Also read: {devotion.supportingScriptures.join(' · ')}
+            </p>
+          )}
         </blockquote>
 
         <div className="mt-5 space-y-5">
           <DevotionSection label="The thought">
-            <p className="text-ink/90 text-pretty">{devotion.thought}</p>
+            <DevotionProse text={devotion.thought} />
           </DevotionSection>
 
           <DevotionSection label="What Scripture teaches">
-            <p className="text-ink/90 text-pretty">{devotion.teaches}</p>
+            <DevotionProse text={devotion.teaches} />
           </DevotionSection>
 
-          {devotion.trustedTeachers.length > 0 && (
-            <DevotionSection label="From trusted teachers">
-              <ul className="space-y-3">
-                {devotion.trustedTeachers.map((entry, index) => (
-                  <li key={index}>
-                    <p className="text-sm font-semibold text-brand-strong dark:text-brand">
-                      {entry.teacher}
-                    </p>
-                    <p className="mt-0.5 text-sm leading-relaxed text-ink/90 text-pretty">
-                      {entry.point}
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            </DevotionSection>
+          {/* Honesty over polish: when the agent could not research, it says so
+              rather than letting the devotion imply that it did. */}
+          {devotion.researchNote && (
+            <p className="rounded-lg bg-surface/60 px-3 py-2 text-xs text-muted">{devotion.researchNote}</p>
           )}
 
           {devotion.questions.length > 0 && (
-            <DevotionSection label="Ask yourself">
+            <DevotionSection label="Selah — pause and reflect">
               <ol className="space-y-2.5">
                 {devotion.questions.map((question, index) => (
                   <li key={index} className="flex gap-2.5 text-ink/90 text-pretty">
@@ -392,21 +365,17 @@ function DailyDevotionCard({ devotion, error, doneToday, onRetry }) {
           )}
 
           <DevotionSection label="Today's application">
-            <p className="text-ink/90 text-pretty">{devotion.application}</p>
+            <DevotionProse text={devotion.application} />
           </DevotionSection>
 
           <DevotionSection label="Pray">
-            <p className="font-sans italic leading-relaxed text-ink/90 text-pretty">
-              {devotion.prayer}
-            </p>
+            <DevotionProse text={devotion.prayer} className="font-sans italic" />
           </DevotionSection>
 
           {devotion.selah && (
             <div className="rounded-xl bg-surface/70 p-4 text-center">
-              <p className="eyebrow text-brand-strong dark:text-brand">Pause & be still</p>
-              <p className="mt-1.5 font-sans italic leading-relaxed text-ink/90 text-pretty">
-                {devotion.selah}
-              </p>
+              <p className="eyebrow text-brand-strong dark:text-brand">Today's Selah</p>
+              <DevotionProse text={devotion.selah} className="mt-1.5 font-sans italic" />
             </div>
           )}
         </div>
@@ -419,9 +388,32 @@ function DailyDevotionCard({ devotion, error, doneToday, onRetry }) {
         </Link>
       </div>
 
-      {/* Micro-copy for screen readers: the devotion is meant to lead into writing one. */}
       {doneToday && <span className="sr-only">You've already journaled today.</span>}
     </section>
+  )
+}
+
+/**
+ * The agent writes multi-paragraph prose — "the thought" alone runs 500-800
+ * words. Rendering that into a single <p> collapses every blank line into an
+ * unreadable wall, so split on blank lines and keep the shape the agent wrote.
+ */
+function DevotionProse({ text, className = '' }) {
+  const paragraphs = String(text ?? '')
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+
+  if (paragraphs.length === 0) return null
+
+  return (
+    <div className={`space-y-2.5 ${className}`.trim()}>
+      {paragraphs.map((paragraph, index) => (
+        <p key={index} className="leading-relaxed text-ink/90 text-pretty">
+          {paragraph}
+        </p>
+      ))}
+    </div>
   )
 }
 

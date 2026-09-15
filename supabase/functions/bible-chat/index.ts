@@ -25,6 +25,7 @@ import {
 } from './prompt.ts'
 import { fetchMinistryFacts, ministrySection, wantsMinistryData } from './context.ts'
 import { translateStream } from './stream.ts'
+import { composePrompt, readBridgeConfig, streamFromBridge } from './bridge.ts'
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? ''
 const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
@@ -32,6 +33,11 @@ const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') ?? ''
 const BASE_URL = (Deno.env.get('OPENAI_BASE_URL') ?? '').replace(/\/$/, '')
 const API_KEY = Deno.env.get('OPENAI_API_KEY') ?? ''
 const MODEL = Deno.env.get('CHAT_MODEL') ?? 'gpt-4o-mini'
+// When BRIDGE_URL is set the assistant is answered by the OpenCode bridge
+// instead of an OpenAI-compatible endpoint. Auth, rate limiting, the crisis
+// guardrail and prompt building all still happen here first — the bridge is a
+// transport swap at the last step, nothing more.
+const BRIDGE = readBridgeConfig((key) => Deno.env.get(key))
 // A DB read must never be able to uncap the assistant, so this is a constant.
 const RATE_LIMIT_PER_MINUTE = Number(Deno.env.get('CHAT_RATE_LIMIT') ?? '10')
 
@@ -59,6 +65,19 @@ function json(body: unknown, status = 200, extra: Record<string, string> = {}) {
   })
 }
 
+// Upstream error bodies can carry model names, base URLs and the occasional
+// key fragment. Strip anything that looks like a credential before it goes
+// anywhere a browser can see it, then cap the length.
+function sanitizeUpstreamDetail(raw: string): string {
+  return raw
+    .replace(/\b(?:sk|sk-proj|op|opk)\s*[-_A-Za-z0-9]{12,}\b/gi, '[redacted]')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+/gi, '[redacted]')
+    .replace(/\.[A-Za-z0-9_-]{30,}\./g, '[redacted]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 240)
+}
+
 Deno.serve(async (req) => {
   // §3.1 — without this the browser preflight fails and nothing ever arrives.
   if (req.method === 'OPTIONS') {
@@ -67,8 +86,8 @@ Deno.serve(async (req) => {
   }
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405)
 
-  if (!BASE_URL || !API_KEY) {
-    console.error('bible-chat: OPENAI_BASE_URL / OPENAI_API_KEY not configured')
+  if (!BRIDGE && (!BASE_URL || !API_KEY)) {
+    console.error('bible-chat: neither BRIDGE_URL nor OPENAI_BASE_URL/OPENAI_API_KEY configured')
     return json({ error: 'The study assistant is not configured yet.' }, 503)
   }
 
@@ -183,6 +202,30 @@ Deno.serve(async (req) => {
   const systemPrompt = buildSystemPrompt(message, passage, ministry)
 
   // --- Call the model ------------------------------------------------------
+
+  // Bridge transport: same NDJSON frames out, so the client is unchanged.
+  // Tradeoffs accepted here deliberately (see bridge.ts): text arrives in
+  // poll-sized chunks rather than tokens, and session isolation on the bridge
+  // is best-effort because it keys off one global active session.
+  if (BRIDGE) {
+    return new Response(
+      streamFromBridge({
+        config: BRIDGE,
+        prompt: composePrompt(systemPrompt, trimmedHistory, message),
+        conversationId,
+        signal: req.signal,
+      }),
+      {
+        headers: {
+          'Content-Type': 'application/x-ndjson; charset=utf-8',
+          'Cache-Control': 'no-store, no-transform',
+          'x-conversation-id': conversationId,
+          ...CORS,
+        },
+      }
+    )
+  }
+
   let upstream: Response
   try {
     upstream = await fetch(`${BASE_URL}/chat/completions`, {
@@ -242,7 +285,21 @@ Deno.serve(async (req) => {
       )
     }
 
-    return json({ error: 'The study assistant had a problem answering.' }, 503)
+    // Relay only the HTTP status, never the upstream body: the body can carry
+    // model names, base URLs and key fragments. A bare status number is enough
+    // to tell a wrong model id (400/404) from an actual outage (5xx); when the
+    // status alone is ambiguous, the sanitized detail below explains it.
+    const redacted = sanitizeUpstreamDetail(detail)
+    return json(
+      {
+        error: `The study assistant had a problem answering (upstream HTTP ${upstream.status}${
+          redacted ? `: ${redacted}` : ''
+        }).`,
+        code: 'upstream',
+        upstreamStatus: upstream.status,
+      },
+      503
+    )
   }
 
   const stream = translateStream(upstream.body, conversationId)

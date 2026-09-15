@@ -28,7 +28,11 @@ import { StudyAssistant } from './StudyAssistant'
 import { SyncStatus } from './SyncStatus'
 import { ExternalChat } from './ExternalChat'
 
-// Flip to true to bring our own Scripture assistant back.
+// The Zackion widget (ExternalChat) owns the chat for now, so our own study
+// assistant is off. Keep it at false unless you are deliberately comparing the
+// two: both float bottom-right, and turning this on also re-enables a call to
+// the OpenCode bridge on 127.0.0.1, which only resolves on a machine running
+// the bridge — never for a real visitor. See src/lib/bibleChatBridge.js.
 const SHOW_STUDY_ASSISTANT = false
 
 export function Layout() {
@@ -86,15 +90,14 @@ export function Layout() {
         <Outlet />
       </main>
 
-      {/* Our own study assistant is hidden while the Zackion widget is in use.
-          Everything behind it — Edge Function, prompt stack, crisis handling —
-          is untouched, so flipping this back on is a one-line change. */}
+      {/* Off by default — Zackion handles chat. Parked higher than the widget's
+          own button so the two do not overlap when this is turned back on. */}
       {SHOW_STUDY_ASSISTANT && (
         <>
           <button
             onClick={() => setAssistantOpen(true)}
             aria-label="Ask the study assistant"
-            className="fixed bottom-[calc(5.25rem+env(safe-area-inset-bottom))] right-4 z-sticky flex h-12 w-12 items-center justify-center rounded-full bg-brand-strong text-on-brand shadow-glow transition-transform active:scale-90"
+            className="fixed bottom-[calc(9.5rem+env(safe-area-inset-bottom))] right-4 z-sticky flex h-12 w-12 items-center justify-center rounded-full bg-brand-strong text-on-brand shadow-glow transition-transform active:scale-90"
           >
             <ChatIcon width={19} height={19} />
           </button>

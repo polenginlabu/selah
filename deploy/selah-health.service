@@ -1,0 +1,21 @@
+# Health watchdog for the bridge + opencode pair. Driven by selah-health.timer.
+#
+# Restart=always only reacts to a process that EXITS. The failure that actually
+# bites is different: the bridge stays up and answering while OpenCode behind
+# it is dead or wedged, and every prompt returns an empty reply instead of an
+# error. systemd sees a healthy process and does nothing.
+#
+#   sudo cp deploy/selah-health-check.sh /usr/local/bin/
+#   sudo chmod +x /usr/local/bin/selah-health-check.sh
+#   sudo cp deploy/selah-health.service deploy/selah-health.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now selah-health.timer
+[Unit]
+Description=SELAH bridge health check
+
+[Service]
+Type=oneshot
+# Runs as root: it needs to restart other units.
+ExecStart=/usr/local/bin/selah-health-check.sh
+StandardOutput=append:/var/log/selah/health.log
+StandardError=append:/var/log/selah/health.log

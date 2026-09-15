@@ -1,0 +1,54 @@
+# The OpenCode bridge — HTTP in front of `opencode serve` for the generator.
+#
+#   sudo cp deploy/selah-bridge.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now selah-bridge
+#
+# Edit User, WorkingDirectory and OPENCODE_ROOT_PATH for your paths.
+[Unit]
+Description=SELAH OpenCode bridge
+After=network-online.target opencode.service
+Wants=network-online.target
+Requires=opencode.service
+
+# Without this, systemd stops trying after 5 restarts in 10s (the default
+# StartLimitBurst) and leaves the service dead until someone notices. For
+# something that must simply stay up, keep retrying forever instead.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=selah
+Group=selah
+WorkingDirectory=/var/www/selah-app/backend/bridge/opencode-bridge
+ExecStart=/usr/bin/node server.js
+
+# Loopback only. The bridge has NO authentication and runs an agent with
+# filesystem access: exposing it publicly is remote code execution. The cron
+# job reaches it over loopback, so nothing needs it bound wider.
+Environment=BRIDGE_HOST=127.0.0.1
+Environment=BRIDGE_PORT=4098
+Environment=OPENCODE_URL=http://127.0.0.1:4097
+
+# The directory the agent treats as its workspace.
+Environment=OPENCODE_ROOT_PATH=/var/www/selah-app
+
+Restart=always
+RestartSec=10
+
+# The bridge holds finished jobs in memory and never evicts them, so on a small
+# VPS cap it rather than let it compete with everything else. Exceeding this
+# kills the process, which Restart=always then brings straight back.
+MemoryMax=512M
+
+# Modest hardening. PrivateTmp is deliberately NOT set: opencode and the
+# generator's lock both use /tmp and a private namespace would hide them.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+
+StandardOutput=append:/var/log/selah/bridge.log
+StandardError=append:/var/log/selah/bridge.log
+
+[Install]
+WantedBy=multi-user.target

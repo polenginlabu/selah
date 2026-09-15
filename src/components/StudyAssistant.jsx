@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { XIcon, ChatIcon } from '../icons'
+import { RichText } from './RichText'
 import { askBibleAssistant, MAX_MESSAGE_CHARS } from '../lib/bibleChat'
+import { askBibleAssistantViaBridge } from '../lib/bibleChatBridge'
 
 const DEFAULT_STARTERS = [
   'What is the context of this chapter?',
@@ -57,7 +59,7 @@ export function StudyAssistant({ passage, onClose, starters = DEFAULT_STARTERS }
 
     abortRef.current = new AbortController()
     try {
-      const { conversationId: id } = await askBibleAssistant({
+      const { conversationId: id } = await askBibleAssistantViaBridge({
         message: question,
         passage,
         history,
@@ -132,7 +134,9 @@ export function StudyAssistant({ passage, onClose, starters = DEFAULT_STARTERS }
                   : 'mr-auto max-w-[90%] rounded-2xl rounded-bl-sm bg-raised px-3.5 py-2 text-sm text-ink'
               }
             >
-              {m.content || (
+              {m.content ? (
+                m.role === 'assistant' ? <RichText content={m.content} /> : m.content
+              ) : (
                 <span className="inline-flex gap-1 py-1" aria-label="Thinking">
                   <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted" />
                   <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:150ms]" />

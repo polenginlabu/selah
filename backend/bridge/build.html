@@ -1,0 +1,1342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenCode Chat</title>
+    <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --primary: #81C638;
+            --primary-dark: #5a9a1a;
+            --dark: #1a1a1a;
+            --gray: #333;
+            --light: #f8f9fa;
+            --muted: #6c757d;
+            --sidebar-width: 260px;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Barlow', sans-serif;
+            background: var(--light);
+            min-height: 100vh;
+        }
+
+        /* ─── Top Header ──────────────────────────────────── */
+
+        .header {
+            background: var(--dark);
+            color: white;
+            padding: 0.75rem 1.5rem;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 56px;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .sidebar-toggle {
+            background: none;
+            border: none;
+            color: white;
+            font-size: 1.1rem;
+            cursor: pointer;
+            padding: 0.3rem;
+            border-radius: 4px;
+            display: none;
+        }
+
+        .sidebar-toggle:hover { background: rgba(255,255,255,0.1); }
+
+        .header h1 {
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+
+        .header h1 span { color: var(--primary); }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #6c757d;
+            display: inline-block;
+            margin-right: 0.35rem;
+        }
+
+        .status-dot.connected { background: var(--primary); }
+
+        /* ─── Sidebar ─────────────────────────────────────── */
+
+        .sidebar {
+            position: fixed;
+            top: 56px;
+            left: 0;
+            width: var(--sidebar-width);
+            height: calc(100vh - 56px);
+            background: white;
+            border-right: 1px solid #e0e0e0;
+            z-index: 90;
+            display: flex;
+            flex-direction: column;
+            transition: transform 0.3s ease;
+        }
+
+        .sidebar-header {
+            padding: 1rem;
+            border-bottom: 1px solid #e0e0e0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .sidebar-header h3 {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .sidebar-header button {
+            background: var(--primary);
+            color: white;
+            border: none;
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s;
+        }
+
+        .sidebar-header button:hover { background: var(--primary-dark); }
+
+        .session-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0.5rem;
+        }
+
+        .session-item {
+            padding: 0.7rem 0.75rem;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-bottom: 2px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            transition: background 0.15s;
+            position: relative;
+        }
+
+        .session-item:hover { background: #f0f0f0; }
+        .session-item.active { background: #e8f5d8; }
+
+        .session-item-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .session-item-title {
+            font-size: 0.85rem;
+            font-weight: 500;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .session-item-meta {
+            font-size: 0.7rem;
+            color: var(--muted);
+            margin-top: 2px;
+        }
+
+        .session-item-delete {
+            opacity: 0;
+            background: none;
+            border: none;
+            color: #dc3545;
+            cursor: pointer;
+            padding: 0.2rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            transition: all 0.15s;
+        }
+
+        .session-item:hover .session-item-delete { opacity: 1; }
+        .session-item-delete:hover { background: #f8d7da; }
+
+        /* ─── Model Selector ──────────────────────────────── */
+
+        .model-selector {
+            padding: 0.75rem 1rem;
+            border-top: 1px solid #e0e0e0;
+        }
+
+        .sidebar-control {
+            padding: 0.75rem 1rem;
+            border-top: 1px solid #e0e0e0;
+        }
+
+        .model-selector label,
+        .sidebar-control label {
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            display: block;
+            margin-bottom: 0.35rem;
+        }
+
+        .model-selector select,
+        .sidebar-control input {
+            width: 100%;
+            padding: 0.45rem 0.5rem;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 0.8rem;
+            background: white;
+        }
+
+        .model-selector select {
+            cursor: pointer;
+        }
+
+        .model-selector select:focus,
+        .sidebar-control input:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        .sidebar-control-row {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+
+        .sidebar-control-row .btn {
+            flex-shrink: 0;
+            padding: 0.45rem 0.75rem;
+            font-size: 0.8rem;
+        }
+
+        .sidebar-note {
+            font-size: 0.72rem;
+            color: var(--muted);
+            margin-top: 0.4rem;
+            line-height: 1.35;
+        }
+
+        /* ─── Main Layout ─────────────────────────────────── */
+
+        .main-wrapper {
+            margin-left: var(--sidebar-width);
+            transition: margin-left 0.3s ease;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 1.5rem;
+        }
+
+        .chat-container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 20px rgba(0,0,0,0.08);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 110px);
+        }
+
+        .chat-header {
+            background: var(--dark);
+            color: white;
+            padding: 0.75rem 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+        }
+
+        .chat-header h2 { font-size: 0.9rem; font-weight: 500; }
+        .chat-header small { font-size: 0.75rem; opacity: 0.7; }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1.5rem;
+        }
+
+        .message {
+            margin-bottom: 1rem;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.user { text-align: right; }
+        .message.ai { text-align: left; }
+
+        .message-role {
+            font-size: 0.7rem;
+            color: var(--muted);
+            margin-bottom: 0.25rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .message.user .message-role { text-align: right; }
+
+        .message-content {
+            display: inline-block;
+            max-width: 85%;
+            padding: 0.75rem 1rem;
+            border-radius: 12px;
+            line-height: 1.6;
+            font-size: 0.95rem;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .message.user .message-content {
+            background: var(--primary);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message.ai .message-content {
+            background: var(--light);
+            color: var(--dark);
+            border-bottom-left-radius: 4px;
+        }
+
+        .message-time {
+            font-size: 0.7rem;
+            color: var(--muted);
+            margin-top: 0.25rem;
+        }
+
+        .message.user .message-time { text-align: right; }
+
+        .typing-indicator {
+            display: none;
+            padding: 0.5rem 1.5rem;
+            color: var(--muted);
+            font-style: italic;
+            font-size: 0.85rem;
+        }
+
+        .live-activity {
+            display: none;
+            padding: 0.5rem 1.5rem;
+            color: #495057;
+            background: #f3f4f6;
+            border-top: 1px solid #eceff1;
+            font-size: 0.8rem;
+            line-height: 1.4;
+            min-height: 34px;
+        }
+
+        .error-banner {
+            margin: 0.5rem 0;
+            padding: 0.6rem 1rem;
+            border-radius: 8px;
+            background: #f8d7da;
+            color: #842029;
+            border: 1px solid #f5c6cb;
+            font-size: 0.85rem;
+        }
+
+        .typing-indicator .dots span {
+            animation: blink 1.4s infinite;
+            font-size: 1.2rem;
+        }
+
+        .typing-indicator .dots span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-indicator .dots span:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes blink {
+            0%, 20% { opacity: 0.2; }
+            50% { opacity: 1; }
+            100% { opacity: 0.2; }
+        }
+
+        .chat-input-area {
+            padding: 1rem 1.5rem;
+            background: #fafafa;
+            border-top: 1px solid #eee;
+            flex-shrink: 0;
+        }
+
+        .chat-form { display: flex; gap: 0.75rem; }
+
+        .chat-form textarea {
+            flex: 1;
+            padding: 0.75rem 1rem;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-family: inherit;
+            font-size: 0.95rem;
+            resize: none;
+            height: 50px;
+            transition: border-color 0.2s;
+        }
+
+        .chat-form textarea:focus { outline: none; border-color: var(--primary); }
+
+        .btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: inherit;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .btn:hover { background: var(--primary-dark); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .btn-danger { background: #dc3545; }
+        .btn-danger:hover { background: #c82333; }
+
+        .quick-actions {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 0.75rem;
+            flex-wrap: wrap;
+        }
+
+        .quick-btn {
+            background: #e9ecef;
+            color: var(--dark);
+            border: none;
+            padding: 0.4rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .quick-btn:hover { background: var(--primary); color: white; }
+
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: var(--muted);
+        }
+
+        .empty-state i {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            color: #ddd;
+        }
+
+        .notification {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            background: var(--dark);
+            color: white;
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s;
+            z-index: 1000;
+        }
+
+        .notification.show { transform: translateY(0); opacity: 1; }
+        .notification.success { border-left: 4px solid var(--primary); }
+        .notification.error { border-left: 4px solid #dc3545; }
+
+        /* ─── Responsive ──────────────────────────────────── */
+
+        @media (max-width: 768px) {
+            .sidebar {
+                transform: translateX(-100%);
+            }
+
+            .sidebar.open {
+                transform: translateX(0);
+                box-shadow: 4px 0 20px rgba(0,0,0,0.15);
+            }
+
+            .sidebar-toggle { display: block; }
+
+            .main-wrapper {
+                margin-left: 0;
+            }
+
+            .container { padding: 1rem; }
+            .chat-container { height: calc(100vh - 100px); }
+            .message-content { max-width: 92%; }
+        }
+    </style>
+</head>
+<body>
+    <!-- ─── Top Header ──────────────────────────────────── -->
+    <header class="header">
+        <div class="header-left">
+            <button class="sidebar-toggle" onclick="toggleSidebar()">
+                <i class="fas fa-bars"></i>
+            </button>
+            <h1><i class="fas fa-terminal"></i> <span>OpenCode</span> Chat</h1>
+        </div>
+        <div class="header-actions">
+            <span id="statusIndicator"><span class="status-dot"></span>Connecting...</span>
+            <button class="btn btn-danger" onclick="clearChat()" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;">
+                <i class="fas fa-trash"></i> Clear
+            </button>
+        </div>
+    </header>
+
+    <!-- ─── Sidebar ─────────────────────────────────────── -->
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <h3>Chats</h3>
+            <button onclick="createNewSession()" title="New Chat">
+                <i class="fas fa-plus"></i>
+            </button>
+        </div>
+        <div class="session-list" id="sessionList">
+            <!-- Sessions populated by JS -->
+        </div>
+        <div class="model-selector">
+            <label for="modelSelect">Model</label>
+            <select id="modelSelect" onchange="changeModel(this.value)">
+                <option value="">Loading models...</option>
+            </select>
+        </div>
+        <div class="sidebar-control">
+            <label for="rootPathInput">Root Path</label>
+            <div class="sidebar-control-row">
+                <input id="rootPathInput" type="text" placeholder="/var/www/html">
+                <button class="btn" type="button" onclick="saveRootPath()">Save</button>
+            </div>
+            <div class="sidebar-note">Used as the workspace root hint for build requests.</div>
+        </div>
+    </aside>
+
+    <!-- ─── Main Content ────────────────────────────────── -->
+    <div class="main-wrapper">
+        <div class="container">
+            <div id="errorBanner" class="error-banner" style="display:none;"></div>
+            <div class="chat-container">
+                <div class="chat-header">
+                    <h2 id="chatTitle"><i class="fas fa-comments"></i> Chat with OpenCode</h2>
+                    <small id="chatSubtitle">Select a model and start chatting</small>
+                </div>
+                <div class="chat-messages" id="chatMessages">
+                    <div class="empty-state" id="emptyState">
+                        <i class="fas fa-robot"></i>
+                        <p>Start a conversation with OpenCode!</p>
+                        <p style="font-size: 0.9rem; margin-top: 0.5rem;">Type your request below. OpenCode will read your messages and respond.</p>
+                    </div>
+                </div>
+                <div class="typing-indicator" id="typingIndicator">
+                    <i class="fas fa-circle-notch fa-spin"></i> OpenCode is thinking<span class="dots"><span>.</span><span>.</span><span>.</span></span>
+                </div>
+                <div class="live-activity" id="liveActivity"></div>
+                <div class="chat-input-area">
+                    <form class="chat-form" onsubmit="sendMessage(event)">
+                        <textarea id="messageInput" placeholder="Type your request for OpenCode..." rows="1"></textarea>
+                        <button type="submit" class="btn">
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                    </form>
+                    <div class="quick-actions">
+                        <button class="quick-btn" onclick="addQuickNote('Fix bug: ')">Bug Report</button>
+                        <button class="quick-btn" onclick="addQuickNote('Add feature: ')">New Feature</button>
+                        <button class="quick-btn" onclick="addQuickNote('Update content: ')">Content Update</button>
+                        <button class="quick-btn" onclick="addQuickNote('Design change: ')">Design Change</button>
+                        <button class="quick-btn" onclick="addQuickNote('Read file: ')">Read File</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="notification" id="notification"></div>
+
+    <script>
+        // ─── Configuration ─────────────────────────────────────────────────────
+        const BRIDGE_PORT = 4098;
+        const BRIDGE_HOST = window.location.hostname || "127.0.0.1";
+        const BASE_URL = `http://${BRIDGE_HOST}:${BRIDGE_PORT}`;
+        const CHAT_URL = `${BASE_URL}/api/chat`;
+        const CHAT_STREAM_URL = `${BASE_URL}/api/chat/stream`;
+        const CHAT_START_URL = `${BASE_URL}/api/chat/start`;
+        const CHAT_STATUS_BASE_URL = `${BASE_URL}/api/chat/status`;
+        const CHAT_RESULT_BASE_URL = `${BASE_URL}/api/chat/result`;
+        const HEALTH_URL = `${BASE_URL}/api/health`;
+        const CLEAR_URL = `${BASE_URL}/api/clear`;
+        const MODELS_URL = `${BASE_URL}/api/models`;
+        const MODEL_URL = `${BASE_URL}/api/model`;
+        const ROOT_PATH_URL = `${BASE_URL}/api/root-path`;
+        const SESSIONS_URL = `${BASE_URL}/api/sessions`;
+        const STREAM_IDLE_TIMEOUT_MS = 45000;
+        const STREAM_MAX_DURATION_MS = 90000;
+        const POLL_TIMEOUT_MS = 10 * 60 * 1000;
+
+        // ─── State ─────────────────────────────────────────────────────────────
+        let messages = [];
+        let isSending = false;
+        let currentSessionId = null;
+        let currentModel = "";
+        let currentRootPath = '';
+
+        // ─── DOM references ────────────────────────────────────────────────────
+        const input = document.getElementById('messageInput');
+        const sendBtn = document.querySelector('.chat-form .btn');
+        const typingIndicator = document.getElementById('typingIndicator');
+        const sessionList = document.getElementById('sessionList');
+        const modelSelect = document.getElementById('modelSelect');
+        const rootPathInput = document.getElementById('rootPathInput');
+        const chatTitle = document.getElementById('chatTitle');
+        const chatSubtitle = document.getElementById('chatSubtitle');
+        const liveActivity = document.getElementById('liveActivity');
+
+        // ─── API helpers ───────────────────────────────────────────────────────
+
+        async function apiFetch(url, options = {}) {
+            const response = await fetch(url, {
+                ...options,
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(options.headers || {}),
+                },
+            });
+
+            if (!response.ok) {
+                const errData = await response.json().catch(() => ({}));
+                throw new Error(errData.details || errData.error || `HTTP ${response.status}`);
+            }
+
+            return response.json();
+        }
+
+        async function sendToBackend(message, model) {
+            return apiFetch(CHAT_URL, {
+                method: 'POST',
+                body: JSON.stringify({ message, model }),
+            });
+        }
+
+        async function startChatJob(message, model) {
+            return apiFetch(CHAT_START_URL, {
+                method: 'POST',
+                body: JSON.stringify({ message, model }),
+            });
+        }
+
+        async function getChatJobStatus(jobId) {
+            return apiFetch(`${CHAT_STATUS_BASE_URL}/${encodeURIComponent(jobId)}`);
+        }
+
+        async function getChatJobResult(jobId) {
+            return apiFetch(`${CHAT_RESULT_BASE_URL}/${encodeURIComponent(jobId)}`);
+        }
+
+        async function loadRootPath() {
+            try {
+                const data = await apiFetch(ROOT_PATH_URL);
+                currentRootPath = data.rootPath || '';
+                rootPathInput.value = currentRootPath;
+            } catch (e) {
+                console.error('Failed to load root path:', e);
+            }
+        }
+
+        async function saveRootPath() {
+            const nextRootPath = rootPathInput.value.trim();
+            if (!nextRootPath) {
+                showErrorBanner('Root path is required');
+                return;
+            }
+
+            try {
+                const data = await apiFetch(ROOT_PATH_URL, {
+                    method: 'POST',
+                    body: JSON.stringify({ rootPath: nextRootPath }),
+                });
+                currentRootPath = data.rootPath || nextRootPath;
+                rootPathInput.value = currentRootPath;
+                showNotification(`Root path set to ${currentRootPath}`, 'success');
+            } catch (e) {
+                console.error('Failed to save root path:', e);
+                showErrorBanner('Failed to save root path');
+            }
+        }
+
+        function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        async function streamToBackend(message, model, onEvent) {
+            const controller = new AbortController();
+            let timedOut = false;
+            let exceededMaxDuration = false;
+            let lastActivityAt = Date.now();
+            const startedAt = Date.now();
+            let stopReading = false;
+
+            const handleJsonPayload = (payload, fallbackEventName = 'message') => {
+                if (!payload || typeof payload !== 'object') return;
+
+                const phase = typeof payload.phase === 'string' ? payload.phase.toLowerCase() : '';
+                const eventFromPayload = typeof payload.event === 'string' ? payload.event.toLowerCase() : '';
+                const eventName = eventFromPayload || fallbackEventName;
+
+                if (payload.error || eventName === 'error' || phase === 'error') {
+                    onEvent('error', payload);
+                    return;
+                }
+
+                if (phase === 'thinking' || phase === 'status' || eventName === 'status') {
+                    onEvent('status', { message: payload.message || payload.status || 'Working...' });
+                    return;
+                }
+
+                onEvent(eventName, payload);
+
+                if (
+                    payload.done === true ||
+                    phase === 'done' ||
+                    phase === 'complete' ||
+                    phase === 'completed' ||
+                    phase === 'end' ||
+                    phase === 'final' ||
+                    eventName === 'done' ||
+                    eventName === 'complete' ||
+                    eventName === 'completed' ||
+                    eventName === 'end'
+                ) {
+                    stopReading = true;
+                }
+            };
+
+            const parseSseBlock = (block) => {
+                if (!block || !block.trim()) return;
+
+                const lines = block.split('\n');
+                let eventName = 'message';
+                const dataLines = [];
+
+                for (const line of lines) {
+                    if (line.startsWith('event:')) {
+                        eventName = line.slice(6).trim();
+                    } else if (line.startsWith('data:')) {
+                        dataLines.push(line.slice(5).trim());
+                    }
+                }
+
+                if (dataLines.length === 0) {
+                    const maybeJson = block.trim();
+                    if (maybeJson.startsWith('{') && maybeJson.endsWith('}')) {
+                        try {
+                            handleJsonPayload(JSON.parse(maybeJson), 'message');
+                        } catch {
+                            return;
+                        }
+                    }
+                    return;
+                }
+
+                const rawData = dataLines.join('\n');
+                if (rawData === '[DONE]') {
+                    stopReading = true;
+                    return;
+                }
+
+                try {
+                    handleJsonPayload(JSON.parse(rawData), eventName);
+                } catch {
+                    return;
+                }
+            };
+
+            const watchdog = setInterval(() => {
+                if (Date.now() - startedAt > STREAM_MAX_DURATION_MS) {
+                    exceededMaxDuration = true;
+                    controller.abort();
+                    return;
+                }
+
+                if (Date.now() - lastActivityAt > STREAM_IDLE_TIMEOUT_MS) {
+                    timedOut = true;
+                    controller.abort();
+                }
+            }, 2000);
+
+            try {
+                const response = await fetch(CHAT_STREAM_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message, model }),
+                    signal: controller.signal,
+                });
+
+                if (!response.ok || !response.body) {
+                    const errData = await response.json().catch(() => ({}));
+                    throw new Error(errData.details || errData.error || `HTTP ${response.status}`);
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (!stopReading) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+
+                    lastActivityAt = Date.now();
+                    buffer += decoder.decode(value, { stream: true });
+                    buffer = buffer.replace(/\r\n/g, '\n');
+
+                    const looksLikeSse = buffer.includes('event:') || buffer.includes('data:');
+
+                    if (looksLikeSse) {
+                        const blocks = buffer.split('\n\n');
+                        buffer = blocks.pop() || '';
+
+                        for (const block of blocks) {
+                            parseSseBlock(block);
+                            if (stopReading) {
+                                await reader.cancel().catch(() => {});
+                                break;
+                            }
+                        }
+                        continue;
+                    }
+
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+                    for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (!(trimmed.startsWith('{') && trimmed.endsWith('}'))) continue;
+                        try {
+                            handleJsonPayload(JSON.parse(trimmed), 'message');
+                            if (stopReading) break;
+                        } catch {
+                            // ignore incomplete/non-json lines
+                        }
+                    }
+                }
+
+                if (!stopReading) {
+                    parseSseBlock(buffer);
+                }
+            } catch (error) {
+                if (exceededMaxDuration) {
+                    throw new Error('Stream exceeded maximum duration');
+                }
+                if (timedOut) {
+                    throw new Error('Response timed out while waiting for stream data');
+                }
+                if (error.name === 'AbortError' && stopReading) return;
+                throw error;
+            } finally {
+                clearInterval(watchdog);
+            }
+        }
+
+        async function clearBackend() {
+            try { await apiFetch(CLEAR_URL, { method: 'POST' }); } catch (e) {}
+        }
+
+        async function checkBackendHealth() {
+            try {
+                const data = await apiFetch(HEALTH_URL);
+                updateConnectionStatus(data.success);
+            } catch (e) {
+                updateConnectionStatus(false);
+            }
+        }
+
+        async function loadModels() {
+            try {
+                const data = await apiFetch(MODELS_URL);
+                modelSelect.innerHTML = '';
+
+                // Add default option
+                const defaultOpt = document.createElement('option');
+                defaultOpt.value = '';
+                defaultOpt.textContent = 'Default (OpenCode)';
+                modelSelect.appendChild(defaultOpt);
+
+                // Group models by provider
+                const providers = {};
+                for (const m of data.models) {
+                    if (!providers[m.provider]) providers[m.provider] = [];
+                    providers[m.provider].push(m);
+                }
+
+                for (const [providerName, models] of Object.entries(providers)) {
+                    const group = document.createElement('optgroup');
+                    group.label = providerName;
+                    for (const m of models) {
+                        const opt = document.createElement('option');
+                        opt.value = m.id;
+                        opt.textContent = m.name;
+                        if (data.activeModel && m.id === data.activeModel) {
+                            opt.selected = true;
+                        }
+                        group.appendChild(opt);
+                    }
+                    modelSelect.appendChild(group);
+                }
+
+                // Set active model if one was returned
+                if (data.activeModel) {
+                    currentModel = data.activeModel;
+                    modelSelect.value = data.activeModel;
+                }
+            } catch (e) {
+                console.error('Failed to load models:', e);
+                modelSelect.innerHTML = '<option value="">Failed to load</option>';
+            }
+        }
+
+        async function changeModel(model) {
+            currentModel = model;
+            if (model) {
+                try {
+                    await apiFetch(MODEL_URL, {
+                        method: 'POST',
+                        body: JSON.stringify({ model }),
+                    });
+                    chatSubtitle.textContent = `Model: ${model}`;
+                } catch (e) {
+                    console.error('Failed to set model:', e);
+                }
+            } else {
+                chatSubtitle.textContent = 'Model: Default (OpenCode)';
+            }
+        }
+
+        async function loadSessions() {
+            try {
+                const data = await apiFetch(SESSIONS_URL);
+                renderSessionList(data.sessions);
+                currentSessionId = data.activeSessionId;
+
+                // If no sessions exist yet, create one
+                if (data.sessions.length === 0) {
+                    await createNewSession();
+                }
+            } catch (e) {
+                console.error('Failed to load sessions:', e);
+            }
+        }
+
+        function renderSessionList(sessions) {
+            sessionList.innerHTML = '';
+            for (const s of sessions) {
+                const div = document.createElement('div');
+                div.className = `session-item${s.id === currentSessionId ? ' active' : ''}`;
+                div.onclick = (e) => {
+                    if (e.target.closest('.session-item-delete')) return;
+                    switchSession(s.id);
+                };
+
+                const timeAgo = getTimeAgo(s.createdAt);
+                div.innerHTML = `
+                    <div class="session-item-info">
+                        <div class="session-item-title">${escapeHtml(s.title)}</div>
+                        <div class="session-item-meta">${s.messageCount} messages · ${timeAgo}</div>
+                    </div>
+                    <button class="session-item-delete" onclick="deleteSession('${s.id}')" title="Delete">
+                        <i class="fas fa-times"></i>
+                    </button>
+                `;
+                sessionList.appendChild(div);
+            }
+        }
+
+        async function createNewSession() {
+            try {
+                const data = await apiFetch(SESSIONS_URL, {
+                    method: 'POST',
+                    body: JSON.stringify({ title: 'New Chat' }),
+                });
+                currentSessionId = data.id;
+                messages = [];
+                clearChatUI();
+                chatTitle.innerHTML = `<i class="fas fa-comments"></i> ${escapeHtml(data.title)}`;
+                chatSubtitle.textContent = 'Model: ' + (currentModel || 'Default (OpenCode)');
+                await loadSessions();
+                closeSidebar();
+            } catch (e) {
+                console.error('Failed to create session:', e);
+                showErrorBanner('Failed to create new chat');
+            }
+        }
+
+        async function switchSession(sessionId) {
+            if (sessionId === currentSessionId) {
+                closeSidebar();
+                return;
+            }
+
+            try {
+                const data = await apiFetch(`${SESSIONS_URL}/${sessionId}/activate`, {
+                    method: 'POST',
+                });
+
+                currentSessionId = data.id;
+                messages = data.messages || [];
+                clearChatUI();
+
+                // Replay messages from this session
+                for (const msg of messages) {
+                    addMessage(msg.content, msg.role, false);
+                }
+
+                chatTitle.innerHTML = `<i class="fas fa-comments"></i> ${escapeHtml(data.title)}`;
+                await loadSessions();
+                closeSidebar();
+            } catch (e) {
+                console.error('Failed to switch session:', e);
+                showErrorBanner('Failed to switch chat');
+            }
+        }
+
+        async function deleteSession(sessionId) {
+            if (!confirm('Delete this chat?')) return;
+            try {
+                await apiFetch(`${SESSIONS_URL}/${sessionId}`, { method: 'DELETE' });
+                await loadSessions();
+
+                // If we deleted the active session, reload the new active one
+                if (sessionId === currentSessionId) {
+                    await switchSession(currentSessionId);
+                }
+            } catch (e) {
+                console.error('Failed to delete session:', e);
+                showErrorBanner('Failed to delete chat');
+            }
+        }
+
+        // ─── UI helpers ────────────────────────────────────────────────────────
+
+        function updateConnectionStatus(connected) {
+            const dot = document.querySelector('.status-dot');
+            const indicator = document.getElementById('statusIndicator');
+            if (connected) {
+                if (dot) dot.classList.add('connected');
+                if (indicator) indicator.innerHTML = '<span class="status-dot connected"></span>Connected';
+            } else {
+                if (dot) dot.classList.remove('connected');
+                if (indicator) indicator.innerHTML = '<span class="status-dot"></span>Disconnected';
+            }
+        }
+
+        function showErrorBanner(message) {
+            const banner = document.getElementById('errorBanner');
+            if (!banner) return;
+            banner.textContent = message;
+            banner.style.display = 'block';
+            setTimeout(() => { banner.style.display = 'none'; banner.textContent = ''; }, 8000);
+        }
+
+        function setInputDisabled(disabled) {
+            input.disabled = disabled;
+            sendBtn.disabled = disabled;
+            isSending = disabled;
+        }
+
+        function showTyping(message = 'OpenCode is thinking') {
+            typingIndicator.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> ${escapeHtml(message)}<span class="dots"><span>.</span><span>.</span><span>.</span></span>`;
+            typingIndicator.style.display = 'block';
+            scrollToBottom();
+        }
+
+        function hideTyping() {
+            typingIndicator.style.display = 'none';
+            typingIndicator.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> OpenCode is thinking<span class="dots"><span>.</span><span>.</span><span>.</span></span>';
+        }
+
+        function setLiveActivity(text) {
+            if (!text) {
+                liveActivity.style.display = 'none';
+                liveActivity.textContent = '';
+                return;
+            }
+
+            liveActivity.style.display = 'block';
+            liveActivity.textContent = text;
+        }
+
+        function clearLiveActivity() {
+            setLiveActivity('');
+        }
+
+        function scrollToBottom() {
+            const container = document.getElementById('chatMessages');
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function clearChatUI() {
+            const container = document.getElementById('chatMessages');
+            const empty = document.getElementById('emptyState');
+            const msgs = container.querySelectorAll('.message');
+            msgs.forEach(m => m.remove());
+            if (empty) empty.style.display = 'block';
+        }
+
+        function addMessage(content, role, scroll = true) {
+            const container = document.getElementById('chatMessages');
+            const empty = document.getElementById('emptyState');
+            if (empty) empty.style.display = 'none';
+
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `message ${role}`;
+            msgDiv.innerHTML = `
+                <div class="message-role">${role === 'user' ? 'You' : 'OpenCode'}</div>
+                <div class="message-content">${formatMessage(content)}</div>
+                <div class="message-time">${new Date().toLocaleTimeString()}</div>
+            `;
+            container.appendChild(msgDiv);
+            if (scroll) scrollToBottom();
+            return msgDiv;
+        }
+
+        function updateLastAiMessage(content) {
+            const container = document.getElementById('chatMessages');
+            const allAiMessages = container.querySelectorAll('.message.ai .message-content');
+            const lastMsg = allAiMessages[allAiMessages.length - 1];
+            if (lastMsg) {
+                lastMsg.innerHTML = formatMessage(content);
+                scrollToBottom();
+            }
+        }
+
+        function formatMessage(text) {
+            if (!text) return '';
+            return escapeHtml(text).replace(/\n/g, '<br>');
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function getTimeAgo(timestamp) {
+            const seconds = Math.floor((Date.now() - timestamp) / 1000);
+            if (seconds < 60) return 'just now';
+            if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+            if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+            return `${Math.floor(seconds / 86400)}d ago`;
+        }
+
+        // ─── Sidebar toggle (mobile) ──────────────────────────────────────────
+
+        function toggleSidebar() {
+            document.getElementById('sidebar').classList.toggle('open');
+        }
+
+        function closeSidebar() {
+            document.getElementById('sidebar').classList.remove('open');
+        }
+
+        // Close sidebar when clicking outside on mobile
+        document.addEventListener('click', (e) => {
+            const sidebar = document.getElementById('sidebar');
+            const toggle = document.querySelector('.sidebar-toggle');
+            if (window.innerWidth <= 768 && sidebar.classList.contains('open') &&
+                !sidebar.contains(e.target) && !toggle.contains(e.target)) {
+                closeSidebar();
+            }
+        });
+
+        // ─── Core: send a message ──────────────────────────────────────────────
+
+        async function sendMessage(e) {
+            if (e) e.preventDefault();
+            if (isSending) return;
+
+            const text = input.value.trim();
+            if (!text) return;
+
+            input.value = '';
+            input.style.height = '50px';
+
+            addMessage(text, 'user');
+            setInputDisabled(true);
+            showTyping('OpenCode is thinking');
+            setLiveActivity('Preparing request...');
+            addMessage('', 'ai');
+
+            try {
+                let finalResponse = '';
+                let thinkingText = '';
+
+                const started = await startChatJob(text, currentModel || undefined);
+                const jobId = started.jobId;
+                if (!jobId) {
+                    throw new Error('Failed to start chat job');
+                }
+
+                const pollStart = Date.now();
+                while (true) {
+                    const status = await getChatJobStatus(jobId);
+
+                    const phase = (status.phase || '').toLowerCase();
+                    const message = status.message || 'Working...';
+                    const tools = Array.isArray(status.tools) ? status.tools : [];
+
+                    if (phase === 'thinking') {
+                        showTyping(message);
+                        setLiveActivity(message);
+                    } else if (phase === 'working') {
+                        const latestTool = tools.length ? tools[tools.length - 1] : '';
+                        const toolMsg = latestTool ? `Running tool: ${latestTool}` : message;
+                        showTyping(toolMsg);
+                        setLiveActivity(toolMsg);
+                    } else if (phase === 'responding') {
+                        setLiveActivity(message || 'Writing response...');
+                    } else if (message) {
+                        setLiveActivity(message);
+                    }
+
+                    if (typeof status.response === 'string' && status.response.length > 0) {
+                        finalResponse = status.response;
+                        updateLastAiMessage(finalResponse);
+                    }
+
+                    if (status.done) {
+                        if (status.error) {
+                            throw new Error(status.error);
+                        }
+
+                        const result = await getChatJobResult(jobId);
+                        finalResponse = result.response || finalResponse;
+                        updateLastAiMessage(finalResponse);
+                        setLiveActivity('Completed');
+                        if (result.model) {
+                            chatSubtitle.textContent = `Model: ${result.model}`;
+                        }
+                        break;
+                    }
+
+                    if (Date.now() - pollStart > POLL_TIMEOUT_MS) {
+                        throw new Error('Timed out waiting for chat result');
+                    }
+
+                    await sleep(700);
+                }
+
+                if (!finalResponse.trim()) {
+                    finalResponse = 'I did not receive a final response from backend. Please try again.';
+                    updateLastAiMessage(finalResponse);
+                    showErrorBanner('No final response received from backend');
+                }
+
+                messages.push({ message: text, role: 'user' });
+                messages.push({ message: finalResponse, role: 'ai' });
+
+                // Refresh session list to show updated message count
+                await loadSessions();
+
+            } catch (error) {
+                console.error('Chat error:', error);
+                updateLastAiMessage('Error: ' + error.message);
+                showErrorBanner('OpenCode connection failed: ' + error.message);
+            } finally {
+                setInputDisabled(false);
+                hideTyping();
+                setTimeout(clearLiveActivity, 1200);
+                input.focus();
+            }
+        }
+
+        // ─── Clear chat ────────────────────────────────────────────────────────
+
+        async function clearChat() {
+            if (confirm('Clear all messages and start a new conversation?')) {
+                messages = [];
+                clearChatUI();
+                clearLiveActivity();
+                await clearBackend();
+                // Also create a fresh session
+                await createNewSession();
+                showNotification('Chat cleared — new conversation started', 'success');
+            }
+        }
+
+        // ─── Quick action buttons ──────────────────────────────────────────────
+
+        function addQuickNote(prefix) {
+            input.value = prefix;
+            input.focus();
+        }
+
+        // ─── Toast notification ────────────────────────────────────────────────
+
+        function showNotification(message, type = 'success') {
+            const notif = document.getElementById('notification');
+            notif.textContent = message;
+            notif.className = `notification ${type} show`;
+            setTimeout(() => notif.classList.remove('show'), 3000);
+        }
+
+        // ─── Event listeners ───────────────────────────────────────────────────
+
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage(e);
+            }
+        });
+
+        input.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+        });
+
+        // ─── Startup ───────────────────────────────────────────────────────────
+
+        (async function init() {
+            await loadRootPath();
+            await loadModels();
+            await loadSessions();
+            checkBackendHealth();
+            setInterval(checkBackendHealth, 15000);
+        })();
+    </script>
+</body>
+</html>

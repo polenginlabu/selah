@@ -1,0 +1,41 @@
+# opencode serve — the agent runtime the SELAH devotion generator talks to.
+#
+#   sudo cp deploy/opencode.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now opencode
+#
+# Edit User, and OPENCODE_BIN if `which opencode` says otherwise.
+[Unit]
+Description=OpenCode headless server
+After=network-online.target
+Wants=network-online.target
+
+# Keep retrying forever rather than giving up after systemd's default of 5
+# restarts in 10 seconds.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=selah
+Group=selah
+
+# 127.0.0.1 only. This server has no authentication of its own; nothing
+# outside this machine should be able to reach it.
+ExecStart=/home/selah/.opencode/bin/opencode serve --port 4097 --hostname 127.0.0.1
+
+# The agent's credentials live in the user's home, so HOME must be set:
+# systemd does not set it the way a login shell does, and without it opencode
+# cannot find auth.json and every model returns an auth error.
+Environment=HOME=/home/selah
+
+Restart=always
+RestartSec=10
+
+# opencode loads a large binary and its own database; 1 GB is comfortable on a
+# 2 GB VPS. Raise it if the agent starts dying mid-research.
+MemoryMax=1G
+StandardOutput=append:/var/log/selah/opencode.log
+StandardError=append:/var/log/selah/opencode.log
+
+[Install]
+WantedBy=multi-user.target

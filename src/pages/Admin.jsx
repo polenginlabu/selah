@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Navigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
@@ -12,7 +12,7 @@ import {
   LockIcon,
   ChevronDownIcon,
 } from '../icons'
-import { formatDateShort } from '../lib/date'
+import { formatDateShort, todayISO } from '../lib/date'
 import {
   isAdminEmail,
   listUsers,
@@ -21,6 +21,7 @@ import {
   resetAllProgress,
   deleteUser,
 } from '../data/admin'
+import { getDevotionForDate, triggerDevotionRun, waitForDevotion } from '../data/dailyDevotion'
 
 function shortDate(timestamp) {
   return timestamp ? formatDateShort(timestamp.slice(0, 10)) : '—'
@@ -151,6 +152,126 @@ function StatCard({ icon: Icon, value, label }) {
   )
 }
 
+/**
+ * Starts a devotion run and waits for the result.
+ *
+ * The button does not generate anything itself — it dispatches the same GitHub
+ * workflow the nightly schedule uses, which is the point: it exercises the
+ * real path rather than a test-only shortcut. GitHub's dispatch API returns no
+ * run id, so the row appearing is the completion signal.
+ */
+function DevotionPanel() {
+  const toast = useToast()
+  const [date, setDate] = useState(todayISO())
+  const [existing, setExisting] = useState(undefined) // undefined = loading
+  const [running, setRunning] = useState(false)
+  const [elapsed, setElapsed] = useState(0)
+  const abortRef = useRef(null)
+
+  const refresh = useCallback(async (forDate) => {
+    setExisting(undefined)
+    try {
+      setExisting(await getDevotionForDate(forDate))
+    } catch (err) {
+      console.error('devotion status failed', err)
+      setExisting(null)
+    }
+  }, [])
+
+  useEffect(() => {
+    refresh(date)
+  }, [date, refresh])
+
+  useEffect(() => () => abortRef.current?.abort(), [])
+
+  const run = async () => {
+    if (running) return
+    const force = Boolean(existing)
+    if (force && !window.confirm(`Replace the devotion already saved for ${date}?`)) return
+
+    setRunning(true)
+    setElapsed(0)
+    abortRef.current = new AbortController()
+
+    try {
+      const res = await triggerDevotionRun({ date, force })
+      toast.success(res?.message ?? 'Run started.')
+
+      const row = await waitForDevotion(date, {
+        signal: abortRef.current.signal,
+        onTick: setElapsed,
+      })
+      setExisting(row)
+      toast.success(`Done — "${row.title}"`)
+    } catch (err) {
+      if (err.name === 'AbortError') return
+      console.error('devotion run failed', err)
+      toast.error(err.message ?? 'The run failed.')
+      // The run may still be going; show whatever is actually stored.
+      refresh(date)
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  return (
+    <section className="card space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="eyebrow">Daily devotion</p>
+          <p className="mt-0.5 text-sm text-muted">
+            Runs the generator on GitHub. Takes 3–5 minutes.
+          </p>
+        </div>
+        <input
+          type="date"
+          value={date}
+          onChange={(e) => setDate(e.target.value)}
+          disabled={running}
+          aria-label="Devotion date"
+          className="rounded-lg border border-line bg-surface px-2.5 py-1.5 text-sm text-ink disabled:opacity-50"
+        />
+      </div>
+
+      <div className="rounded-xl border border-line p-3 text-sm">
+        {existing === undefined ? (
+          <p className="text-muted">Checking…</p>
+        ) : existing ? (
+          <>
+            <p className="font-semibold text-ink">{existing.title}</p>
+            <p className="mt-0.5 text-muted">
+              {existing.topic.label} · {existing.keyScripture}
+            </p>
+            {existing.researchNote && (
+              <p className="mt-1 text-xs text-muted">{existing.researchNote}</p>
+            )}
+          </>
+        ) : (
+          <p className="text-muted">Nothing saved for {date} yet.</p>
+        )}
+      </div>
+
+      <button
+        onClick={run}
+        disabled={running || existing === undefined}
+        className="btn-primary w-full disabled:opacity-60"
+      >
+        {running
+          ? `Generating… ${elapsed}s`
+          : existing
+            ? 'Regenerate this devotion'
+            : 'Generate this devotion'}
+      </button>
+
+      {running && (
+        <p className="text-center text-xs text-muted">
+          You can leave this page — the run continues on GitHub.
+        </p>
+      )}
+    </section>
+  )
+}
+
 export default function Admin() {
   const { user } = useAuth()
   const toast = useToast()
@@ -250,6 +371,8 @@ export default function Admin() {
         <StatCard icon={ZapIcon} value={totalXp.toLocaleString()} label="Total XP" />
         <StatCard icon={UsersIcon} value={totalDisciples} label="Disciples" />
       </div>
+
+      <DevotionPanel />
 
       <div className="relative">
         <SearchIcon
