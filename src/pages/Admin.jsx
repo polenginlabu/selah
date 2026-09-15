@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Navigate } from 'react-router-dom'
+import { Link, Navigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 import {
@@ -245,6 +245,11 @@ function DevotionPanel() {
             {existing.researchNote && (
               <p className="mt-1 text-xs text-muted">{existing.researchNote}</p>
             )}
+            {/* The reader route takes any date, so reviewing an older or a
+                pre-generated future devotion needs no separate admin view. */}
+            <Link to={`/daily/${date}`} className="btn-ghost mt-3 inline-flex px-3 py-1.5 text-sm">
+              Read this devotion →
+            </Link>
           </>
         ) : (
           <p className="text-muted">Nothing saved for {date} yet.</p>

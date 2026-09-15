@@ -129,10 +129,11 @@ Deno.serve(async () => {
       const { data: tokens } = await supabase.from('device_tokens').select('token').eq('user_id', row.user_id)
       if (!tokens?.length) continue
 
+      const uniqueTokens = [...new Set(tokens.map((t) => t.token))]
       accessToken ??= await getFirebaseAccessToken(serviceAccount)
 
       let anySent = false
-      for (const { token } of tokens) {
+      for (const token of uniqueTokens) {
         const ok = await sendPush(accessToken, serviceAccount.project_id, token, 'Meditate on this', row.focus_word)
         anySent ||= ok
       }

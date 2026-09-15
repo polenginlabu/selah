@@ -41,8 +41,8 @@ export async function enableNotifications(userId) {
   if (!token) return 'unsupported'
 
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
-  await supabase.from('device_tokens').upsert({ token, user_id: userId })
-  await supabase.from('notification_profiles').upsert({ user_id: userId, timezone })
+  await supabase.from('device_tokens').upsert({ token, user_id: userId }, { onConflict: 'token' })
+  await supabase.from('notification_profiles').upsert({ user_id: userId, timezone }, { onConflict: 'user_id' })
   return 'granted'
 }
 

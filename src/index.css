@@ -222,3 +222,60 @@ input[type='datetime-local']::-webkit-datetime-edit-fields-wrapper {
     scroll-behavior: auto !important;
   }
 }
+
+/* ── Zackion chat widget positioning ──────────────────────────────────────
+ *
+ * The widget injects its own fixed-position DOM into <body> and takes its
+ * offsets from Zackion's server-side config (offsetX/offsetY, default 24px),
+ * so there is no local setting to change — its launcher lands 24px from the
+ * bottom of the viewport, directly on top of the bottom nav.
+ *
+ * Overriding from here is safe because the widget does NOT use a shadow root;
+ * its nodes are ordinary elements in our document. The ids are built as
+ * `chation-<bot key>-<part>`, so these match on the prefix and suffix rather
+ * than hard-coding the key — a new bot key keeps working.
+ *
+ * !important is required: the widget's own injected stylesheet marks
+ * `position:fixed` and `display:flex` as important, and it writes some offsets
+ * inline. */
+:root {
+  /* Height of the bottom nav in Layout.jsx: py-1.5 wrapper + a py-1.5 item
+     with a 20px icon and its label, plus the hairline border. */
+  --app-nav-h: 3.75rem;
+  --app-nav-clearance: calc(var(--app-nav-h) + env(safe-area-inset-bottom) + 0.75rem);
+  /* Half of max-w-xl (576px), so the widget can hang off the right edge of the
+     app column instead of the far edge of a wide window. */
+  --app-half-width: 18rem;
+}
+
+[id^='chation-'][id$='-btn'] {
+  bottom: var(--app-nav-clearance) !important;
+  right: max(1rem, calc(50vw - var(--app-half-width) + 1rem)) !important;
+  left: auto !important;
+  /* The widget ships z-index 2147483647, which floats it over our own sheets
+     and dialogs. Sit above the nav (z-sticky, 30) but below the modal backdrop
+     (40) so a dialog covers it, as any other page furniture would be. */
+  z-index: 35 !important;
+}
+
+/* The open conversation panel, and the iframe embed variant. Same clearance so
+   the message input never sits underneath the nav. */
+[id^='chation-'][id$='-win'],
+[id^='chation-iframe-'] {
+  bottom: var(--app-nav-clearance) !important;
+  right: max(1rem, calc(50vw - var(--app-half-width) + 1rem)) !important;
+  left: auto !important;
+  z-index: 35 !important;
+  max-height: calc(100dvh - var(--app-nav-clearance) - 1rem) !important;
+}
+
+/* On a phone the panel goes full-bleed, where a right offset would strand it.
+   Keep only the bottom clearance. */
+@media (max-width: 480px) {
+  [id^='chation-'][id$='-win'],
+  [id^='chation-iframe-'] {
+    right: 0.75rem !important;
+    left: 0.75rem !important;
+    width: auto !important;
+  }
+}
