@@ -63,8 +63,9 @@ Rules that outrank formatting convenience:
  * @param {string} opts.dateISO      today, as the agent should date it
  * @param {Array<{date: string, topic: string, topicLabel: string}>} opts.history
  *        recent devotions, newest first, for section 4 and section 10
+ * @param {object} opts.config       admin-run overrides (see configSection)
  */
-export function buildDevotionPrompt({ dateISO, history = [] }) {
+export function buildDevotionPrompt({ dateISO, history = [], config = {} }) {
   // The brief runs ~16,000 characters and its section 7 describes a rendered
   // text layout in detail. A single contradicting instruction at the very end
   // loses that tug-of-war: the first run came back as beautifully formatted
@@ -74,6 +75,7 @@ export function buildDevotionPrompt({ dateISO, history = [] }) {
     HEADLINE_CONTRACT,
     SELAH_AGENT_PROMPT,
     todaySection(dateISO, history),
+    configSection(config),
     OUTPUT_CONTRACT,
   ]
   return parts.join('\n\n')
@@ -114,6 +116,69 @@ function todaySection(dateISO, history) {
       'untouched:',
       '',
       ...history.map((h) => `- ${h.date}: ${h.topicLabel} (${h.topic})`)
+    )
+  }
+
+  return lines.join('\n')
+}
+
+/**
+ * The admin's run-time overrides, stated last so they land fresh after the
+ * long brief. These deliberately OVERRIDE the brief where they conflict:
+ *
+ *   - translation  section 7 / the contract only give an example; this is the
+ *                  actual translation to quote and to report.
+ *   - theme        section 4 normally picks a topic; when set, it steers the
+ *                  whole devotional around one theme instead of a random pick.
+ *   - teachers     section 3 lists preferred sources; when set, these replace
+ *                  that list for this run.
+ *
+ * Absent values fall back to the brief's own behaviour — no theme keeps the
+ * intentional-randomness, no teachers keep the default source list.
+ */
+function configSection(config) {
+  const translation = (config.translation || 'NIV').trim()
+  const lines = [
+    '==================================================',
+    'RUN CONFIGURATION (set by the app admin — read carefully)',
+    '==================================================',
+    '',
+    'SCRIPTURE TRANSLATION:',
+    `- Quote today's Scripture and every other verse from the ${translation} translation only.`,
+    `- Set "keyScriptureTranslation" to exactly "${translation}".`,
+    '',
+    'TOPIC THEME:',
+  ]
+
+  const theme = (config.theme || '').trim()
+  if (theme) {
+    lines.push(
+      `- Build this entire devotional around the theme: "${theme}".`,
+      '- Let that theme shape the topic, the Scripture chosen, the thought, the',
+      '- questions, the application and the prayer — a coherent thread, not a mention.',
+      '- Stay faithful to the brief: the theme directs the choice; it never bends',
+      '- Scripture to fit.',
+    )
+  } else {
+    lines.push(
+      '- No theme is set. Choose the topic with the intentional-randomness the',
+      '- brief describes in section 4.',
+    )
+  }
+
+  lines.push('', 'RESEARCH SOURCES:')
+  const teachers = (config.teachers ?? []).filter((t) => (t?.name ?? '').trim())
+  if (teachers.length > 0) {
+    lines.push('- Research the following trusted teachers, overriding section 3 of the brief:')
+    for (const t of teachers) {
+      const url = (t?.url ?? '').trim()
+      lines.push(`  - ${t.name.trim()}${url ? ` (${url})` : ''}`)
+    }
+    lines.push('- Use these teachers, and no others, for the web-research step.')
+  } else {
+    lines.push(
+      '- No custom teachers are set. Use the default preferred sources in section 3',
+      '- of the brief.',
     )
   }
 

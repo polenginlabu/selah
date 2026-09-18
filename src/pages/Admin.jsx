@@ -11,6 +11,9 @@ import {
   ZapIcon,
   LockIcon,
   ChevronDownIcon,
+  PlusIcon,
+  XIcon,
+  CheckIcon,
 } from '../icons'
 import { formatDateShort, todayISO } from '../lib/date'
 import {
@@ -21,7 +24,13 @@ import {
   resetAllProgress,
   deleteUser,
 } from '../data/admin'
-import { getDevotionForDate, triggerDevotionRun, waitForDevotion } from '../data/dailyDevotion'
+import {
+  getDevotionForDate,
+  triggerDevotionRun,
+  waitForDevotion,
+  getDevotionSettings,
+  saveDevotionSettings,
+} from '../data/dailyDevotion'
 
 function shortDate(timestamp) {
   return timestamp ? formatDateShort(timestamp.slice(0, 10)) : '—'
@@ -277,6 +286,200 @@ function DevotionPanel() {
   )
 }
 
+const THEME_PRESETS = ['Peace', 'Joy', 'Hope', 'Faith', 'Gratitude', 'Rest', 'Courage']
+
+/**
+ * Admin controls for the nightly devotion generator.
+ *
+ * Edits the single devotion_settings row the generator reads at run time:
+ * which teachers it researches, what theme to build around (blank = random),
+ * and the Scripture translation (NIV). Saved through SECURITY DEFINER RPCs
+ * that re-check admin_require() in the database.
+ */
+function DevotionSettingsPanel() {
+  const toast = useToast()
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [theme, setTheme] = useState('')
+  const [teachers, setTeachers] = useState([])
+  const [nextKey, setNextKey] = useState(0)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const s = await getDevotionSettings()
+      setTheme(s.theme ?? '')
+      setTeachers((s.teachers ?? []).map((t, i) => ({ key: i, name: t.name ?? '', url: t.url ?? '' })))
+      setNextKey((s.teachers ?? []).length)
+    } catch (err) {
+      console.error('Failed to load devotion settings:', err)
+      toast.error(err.message ?? 'Could not load settings.')
+    } finally {
+      setLoading(false)
+    }
+  }, [toast])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  const setTeacher = (key, patch) =>
+    setTeachers((rows) => rows.map((r) => (r.key === key ? { ...r, ...patch } : r)))
+
+  const addTeacher = () => {
+    setTeachers((rows) => [...rows, { key: nextKey, name: '', url: '' }])
+    setNextKey((k) => k + 1)
+  }
+
+  const removeTeacher = (key) => setTeachers((rows) => rows.filter((r) => r.key !== key))
+
+  const save = async () => {
+    if (saving) return
+    setSaving(true)
+    try {
+      const cleanTeachers = teachers
+        .map((t) => ({ name: t.name.trim(), url: t.url.trim() }))
+        .filter((t) => t.name)
+      await saveDevotionSettings({
+        theme: theme.trim() || null,
+        translation: 'NIV',
+        teachers: cleanTeachers,
+      })
+      setTeachers(cleanTeachers.map((t, i) => ({ key: i, ...t })))
+      setNextKey(cleanTeachers.length)
+      toast.success(theme.trim() ? `Devotion theme set to “${theme.trim()}”.` : 'Devotions will use a random theme.')
+    } catch (err) {
+      console.error('Failed to save devotion settings:', err)
+      toast.error(err.message ?? 'Could not save settings.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className="card space-y-4">
+      <div>
+        <p className="eyebrow">Devotion generator</p>
+        <p className="mt-0.5 text-sm text-muted">
+          These are read by the nightly run. A theme of “Peace” steers the whole devotion toward
+          it; leave it blank to let the agent pick randomly.
+        </p>
+      </div>
+
+      {/* Translation — fixed to NIV for now */}
+      <div className="rounded-xl border border-line p-3">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted">Scripture translation</p>
+        <p className="mt-1 text-sm text-ink">
+          New International Version (NIV) <span className="chip ml-1">fixed</span>
+        </p>
+      </div>
+
+      {/* Theme */}
+      <div className="space-y-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted">Theme</p>
+        <input
+          value={theme}
+          onChange={(e) => setTheme(e.target.value)}
+          disabled={loading || saving}
+          placeholder="e.g. Peace — leave blank for random"
+          className="input"
+        />
+        <div className="flex flex-wrap gap-1.5">
+          {THEME_PRESETS.map((preset) => (
+            <button
+              key={preset}
+              type="button"
+              onClick={() => setTheme(preset)}
+              disabled={loading || saving}
+              className={`chip transition-colors ${
+                theme.trim().toLowerCase() === preset.toLowerCase()
+                  ? '!bg-brand !text-white'
+                  : 'hover:text-ink'
+              }`}
+            >
+              {preset}
+            </button>
+          ))}
+          {theme.trim() && (
+            <button
+              type="button"
+              onClick={() => setTheme('')}
+              disabled={saving}
+              className="chip transition-colors hover:text-ink"
+              title="Back to random theme"
+            >
+              <XIcon width={10} height={10} /> Random
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Teachers */}
+      <div className="space-y-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+          Research teachers
+        </p>
+        <p className="text-xs text-muted">
+          Which trusted teachers the agent researches. Leave empty to use the default sources.
+        </p>
+        {teachers.length === 0 ? (
+          <p className="text-xs italic text-muted">No custom teachers — using defaults.</p>
+        ) : (
+          <div className="space-y-1.5">
+            {teachers.map((t) => (
+              <div key={t.key} className="flex items-center gap-2">
+                <input
+                  value={t.name}
+                  onChange={(e) => setTeacher(t.key, { name: e.target.value })}
+                  disabled={saving}
+                  placeholder="Teacher name"
+                  aria-label="Teacher name"
+                  className="input min-w-0 flex-1"
+                />
+                <input
+                  value={t.url}
+                  onChange={(e) => setTeacher(t.key, { url: e.target.value })}
+                  disabled={saving}
+                  placeholder="Source URL (optional)"
+                  aria-label="Source URL"
+                  className="input min-w-0 flex-[1.4]"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeTeacher(t.key)}
+                  disabled={saving}
+                  aria-label={`Remove ${t.name || 'teacher'}`}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-canvas text-muted transition-colors hover:text-red-500 disabled:opacity-40"
+                >
+                  <TrashIcon width={13} height={13} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={addTeacher}
+          disabled={saving}
+          className="btn-outline px-3 py-1.5 text-sm"
+        >
+          <PlusIcon width={14} height={14} /> Add teacher
+        </button>
+      </div>
+
+      <button onClick={save} disabled={loading || saving} className="btn-primary w-full disabled:opacity-60">
+        {saving ? (
+          'Saving…'
+        ) : (
+          <>
+            <CheckIcon width={14} height={14} /> Save settings
+          </>
+        )}
+      </button>
+    </section>
+  )
+}
+
 export default function Admin() {
   const { user } = useAuth()
   const toast = useToast()
@@ -378,6 +581,8 @@ export default function Admin() {
       </div>
 
       <DevotionPanel />
+
+      <DevotionSettingsPanel />
 
       <div className="relative">
         <SearchIcon

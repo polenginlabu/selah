@@ -112,6 +112,37 @@ export async function waitForDevotion(date, { timeoutMs = 10 * 60 * 1000, interv
   throw new Error('The run did not finish within 10 minutes. Check the Actions tab.')
 }
 
+// --- Admin: configure the generator ---------------------------------------
+//
+// The nightly generator reads a single devotion_settings row and injects it
+// into the SELAH brief. These let an admin edit that row from the console.
+// Access is enforced in the database by admin_require() — never by the client.
+
+/** Reads the current generator overrides: {theme, translation, teachers}. */
+export async function getDevotionSettings() {
+  const { data, error } = await supabase.rpc('admin_get_devotion_settings')
+  if (error) throw error
+  return {
+    theme: data?.theme ?? null,
+    translation: data?.translation || 'NIV',
+    teachers: data?.teachers ?? [],
+    updatedAt: data?.updated_at ? new Date(data.updated_at).getTime() : null,
+  }
+}
+
+/**
+ * Persists the generator overrides. `theme` null/blank means the agent picks
+ * randomly; `teachers` is an array of {name, url}.
+ */
+export async function saveDevotionSettings({ theme = null, translation = 'NIV', teachers = [] } = {}) {
+  const { error } = await supabase.rpc('admin_save_devotion_settings', {
+    p_theme: theme || null,
+    p_translation: translation || 'NIV',
+    p_teachers: teachers ?? [],
+  })
+  if (error) throw error
+}
+
 async function readFunctionError(error) {
   const response = error?.context
   // No Response at all means the browser blocked it before any body existed —

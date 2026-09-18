@@ -98,6 +98,7 @@ async function main() {
   // --- Where it goes -------------------------------------------------------
   let admin = null
   let history = []
+  let config = { theme: null, translation: 'NIV', teachers: [] }
 
   if (!args.dryRun) {
     for (const [key, val] of Object.entries({
@@ -136,10 +137,35 @@ async function main() {
       topicLabel: r.topic_label,
     }))
     log(`history: ${history.length} previous devotion(s)`)
+
+    // Admin-configured overrides (teachers, theme, translation). The settings
+    // table is admin-only, so the browser's anonymous key can never reach it —
+    // only the service role (here) and the admin RPCs can. A missing row, or a
+    // table that hasn't been migrated yet, must not stop the nightly run, so
+    // any failure falls back to the brief's defaults.
+    try {
+      const { data: settings } = await admin
+        .from('devotion_settings')
+        .select('theme, translation, teachers')
+        .eq('id', true)
+        .maybeSingle()
+      config = {
+        theme: settings?.theme ?? null,
+        translation: settings?.translation || 'NIV',
+        teachers: settings?.teachers ?? [],
+      }
+      const named = config.teachers.filter((t) => t?.name?.trim()).length
+      log(
+        `settings: theme=${config.theme || 'random'}, translation=${config.translation}, ` +
+          `${named} custom teacher(s)`
+      )
+    } catch (err) {
+      log(`could not read devotion settings — using defaults (${err.message})`)
+    }
   }
 
   // --- Generate ------------------------------------------------------------
-  const prompt = buildDevotionPrompt({ dateISO: date, history })
+  const prompt = buildDevotionPrompt({ dateISO: date, history, config })
   const model = args.model ?? env.BRIDGE_MODEL
 
   // console.log(model, env.BRIDGE_URL);

@@ -107,7 +107,7 @@ export function normalizeDevotion(raw) {
     title: str(raw.title),
     keyScripture: str(raw.keyScripture),
     keyScriptureText: str(raw.keyScriptureText),
-    keyScriptureTranslation: str(raw.keyScriptureTranslation) || 'World English Bible',
+    keyScriptureTranslation: str(raw.keyScriptureTranslation) || 'NIV',
     supportingScriptures: arr(raw.supportingScriptures).map(str).filter(Boolean).slice(0, 4),
     thought,
     teaches: str(raw.teaches),
