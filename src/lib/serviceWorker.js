@@ -36,6 +36,17 @@ export function registerServiceWorker({ onUpdateReady } = {}) {
 
     const registration = await navigator.serviceWorker.register(SERVICE_WORKER_PATH)
 
+    // A new build is precached but the browser only checks for updates on
+    // navigation and roughly once a day. That is why a fresh deploy sometimes
+    // needs a manual hard refresh to appear. Check on every focus too, so an
+    // update is picked up as soon as the user returns to the tab — then the
+    // auto-apply below swaps it in without them doing anything.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        registration.update().catch(() => {})
+      }
+    })
+
     // A new build is precached but waiting behind the current one. Let the app
     // decide when to swap — reloading underneath someone mid-devotion is worse
     // than showing them a prompt.

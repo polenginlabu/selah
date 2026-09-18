@@ -78,8 +78,19 @@ registerRoute(
 
 // --- 3. Update handling ----------------------------------------------------
 
+// Take over as soon as a new build installs instead of waiting for every tab
+// to close. The page reloads itself on controllerchange, so the swap lands
+// quickly — no waiting phase, no lingering on a stale bundle. The trade-off is
+// that an in-flight action can be interrupted by the reload; the app accepts
+// that for now in exchange for never serving a stale build.
+self.addEventListener('install', () => {
+  self.skipWaiting()
+})
+
 // Let the page tell a waiting worker to take over, so an update can be applied
-// on the user's cue instead of only after every tab is closed.
+// on the user's cue instead of only after every tab is closed. (Kept for
+// backwards compatibility — the worker now skips waiting on its own, but an
+// older page may still post this message.)
 self.addEventListener('message', (event) => {
   if (event.data?.type === 'SKIP_WAITING') self.skipWaiting()
 })

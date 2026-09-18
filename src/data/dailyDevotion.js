@@ -122,11 +122,14 @@ export async function waitForDevotion(date, { timeoutMs = 10 * 60 * 1000, interv
 export async function getDevotionSettings() {
   const { data, error } = await supabase.rpc('admin_get_devotion_settings')
   if (error) throw error
+  // admin_get_devotion_settings is declared `returns table(...)`, so PostgREST
+  // hands back an array of rows (here always 0 or 1), not a single object.
+  const row = Array.isArray(data) ? data[0] : data
   return {
-    theme: data?.theme ?? null,
-    translation: data?.translation || 'NIV',
-    teachers: data?.teachers ?? [],
-    updatedAt: data?.updated_at ? new Date(data.updated_at).getTime() : null,
+    theme: row?.theme ?? null,
+    translation: row?.translation || 'NIV',
+    teachers: row?.teachers ?? [],
+    updatedAt: row?.updated_at ? new Date(row.updated_at).getTime() : null,
   }
 }
 
