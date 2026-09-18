@@ -2,6 +2,52 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Reader controls stay comfortably tappable on small phones. No chapter
+   transitions: frequent navigation should feel immediate. */
+.bible-icon-button {
+  @apply inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-ink;
+}
+.bible-reader button:focus-visible,
+.bible-sheet button:focus-visible,
+.bible-sheet input:focus-visible,
+.bible-verse:focus-visible {
+  outline: 2px solid oklch(var(--brand));
+  outline-offset: 3px;
+}
+.bible-sheet {
+  position: fixed;
+  inset: auto 0 0;
+  margin: 0 auto;
+  width: 100%;
+  max-width: 36rem;
+  max-height: 88dvh;
+  padding: 0;
+  border: 1px solid oklch(var(--line));
+  border-bottom: 0;
+  border-radius: 24px 24px 0 0;
+  background: oklch(var(--surface));
+  color: oklch(var(--ink));
+}
+.bible-sheet[open] { display: flex; flex-direction: column; }
+.bible-sheet::backdrop { background: rgb(0 0 0 / 0.45); }
+.bible-passage { line-height: 1.95; overflow-wrap: break-word; }
+.bible-verse {
+  cursor: pointer;
+  padding: 4px 0;
+  border-radius: 4px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  scroll-margin-top: 6rem;
+}
+.bible-verse-selected {
+  background: oklch(var(--brand) / 0.15);
+  box-shadow: 0 2px 0 oklch(var(--brand) / 0.5);
+}
+@media (hover: hover) {
+  .bible-icon-button:hover { background: oklch(var(--raised)); }
+  .bible-verse:hover { background: oklch(var(--brand) / 0.1); }
+}
+
 :root {
   /* Selah brand — Sky / Navy Deep / Electric Blue (Figma brand guidelines) */
   --canvas: 0.971 0.014 273;      /* #F2F5FF sky */

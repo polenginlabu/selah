@@ -7,7 +7,7 @@ import { withOpacity } from '../lib/gamification'
 import {
   SproutIcon,
   SearchIcon,
-  BellIcon,
+  TargetIcon,
   UsersIcon,
   CalendarIcon,
   ChevronRightIcon,
@@ -441,13 +441,14 @@ export default function DiscipleTree() {
           >
             <SearchIcon width={16} height={16} />
           </button>
-          <button
+          <Link
+            to="/goals"
             type="button"
-            aria-label="Notifications"
+            aria-label="Goals"
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-line bg-surface text-muted transition-colors hover:bg-raised"
           >
-            <BellIcon width={16} height={16} />
-          </button>
+            <TargetIcon width={16} height={16} />
+          </Link>
         </div>
       </header>
       <div className="flex items-center gap-4 text-xs text-muted">
@@ -1212,14 +1213,6 @@ function EditDetailsModal({ person, onSave, onClose, onMove, onRemove }) {
                   className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-line py-3 text-sm font-semibold text-ink transition-colors active:scale-[0.98]"
                 >
                   Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onRemove(person.id)}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-red-500/15 py-3 text-sm font-semibold text-red-400 transition-colors active:scale-[0.98]"
-                >
-                  <TrashIcon width={14} height={14} />
-                  Confirm
                 </button>
               </div>
             ) : (

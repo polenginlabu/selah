@@ -10,7 +10,8 @@
     "devotion:generate": "node scripts/generate-daily-devotion.js",
     "devotion:dry-run": "node scripts/generate-daily-devotion.js --dry-run",
     "devotion:local": "sh scripts/selah/cron.sh",
-    "devotion:test": "node --test scripts/selah/*.test.js"
+    "devotion:test": "node --test scripts/selah/*.test.js",
+    "bible:test": "node --test scripts/bible/*.test.js"
   },
   "dependencies": {
     "@lottiefiles/dotlottie-react": "^0.19.16",

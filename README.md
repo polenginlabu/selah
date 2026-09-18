@@ -29,7 +29,7 @@ Core ideas:
 | Styling | Tailwind CSS 3 (+ PostCSS, Autoprefixer) |
 | Auth & data | Supabase (Postgres + Auth) |
 | Push | Firebase Cloud Messaging + service worker |
-| Scripture | ESV API, NLT API |
+| Scripture | API.Bible (NIV UK, MSG, AMP), bible-api.com, optional ESV/NLT |
 | Delivery | PWA (`manifest.json`, standalone display) |
 
 No backend service of its own — Supabase provides auth, the relational database, and an Edge Function for reminder dispatch.
@@ -42,7 +42,30 @@ No backend service of its own — Supabase provides auth, the relational databas
 Free-form journal entries, tagged, linked to a verse and translation, and searchable. A verse of the day drives the daily prompt.
 
 ### Bible reader
-In-app reader backed by the ESV and NLT APIs, so a verse can be read and journaled without leaving the app.
+Mobile-first reader with a book/chapter picker, translation picker, full-Bible search
+in NIV UK/MSG/AMP, adjustable text size and font, paragraph/verse layouts, and
+copy/share/journal actions. The reading position and appearance are saved locally.
+MSG verse ranges are preserved rather than splitting or duplicating their text.
+
+API.Bible is accessed through the authenticated `bible-reader` Supabase Edge
+Function. Its API key never enters the Vite bundle. Set **API_BIBLE_KEY** under
+Supabase → Edge Functions → Secrets, then deploy:
+
+```bash
+supabase functions deploy bible-reader --no-verify-jwt
+```
+
+The function validates the caller with `auth.getUser()` itself (including newer
+Supabase signing keys). Only the three configured translation IDs and valid
+chapter/search requests are proxied. Availability is checked against the live
+subscription catalogue; provider errors are displayed without switching versions
+silently. New readers start in NIV Anglicised; existing saved versions are retained.
+WEB/KJV/BBE remain available without an API.Bible subscription.
+
+Publisher copyright is displayed below each chapter and API.Bible's FUMS view
+token is reported through its browser tracker when Scripture is displayed. Licensed
+chapters are not persisted to localStorage or the service worker cache. Run parser
+and canonical-book validation tests with `npm run bible:test`.
 
 ### Gamification
 Defined entirely as data in [`src/lib/gamification.js`](src/lib/gamification.js) — adding a tier or achievement is a content change, not a code change.
@@ -103,7 +126,8 @@ Routes are code-split with `React.lazy` + `Suspense`; only `Home` and `SignIn` s
 - Node.js 18+
 - A Supabase project
 - A Firebase project with Cloud Messaging enabled (optional — push degrades gracefully)
-- ESV and NLT API keys (optional — needed for the Bible reader)
+- An API.Bible subscription/key for NIV UK, MSG and AMP (server-side secret)
+- ESV and NLT API keys (optional legacy translations)
 
 ### Install and run
 

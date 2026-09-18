@@ -111,8 +111,11 @@ export function PrivacyPolicy() {
         <p>
           <strong>Supabase</strong> hosts the database and handles sign-in.{' '}
           <strong>Google</strong> provides sign-in. <strong>Firebase Cloud Messaging</strong>{' '}
-          delivers push notifications. <strong>ESV</strong> and <strong>NLT</strong> provide Bible
-          text. A third-party chat assistant is embedded in the app; messages you type into it are
+          delivers push notifications. <strong>API.Bible</strong>, <strong>bible-api.com</strong>,{' '}
+          <strong>ESV</strong> and <strong>NLT</strong> provide Bible text. API.Bible records Scripture
+          views using its usage tracker, including anonymous device and session identifiers, to
+          report usage to publishers. We do not send it your account name or email.
+          A third-party chat assistant is embedded in the app; messages you type into it are
           processed by that provider.
         </p>
         <p>We do not sell your information, and we do not use it for advertising.</p>

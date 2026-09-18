@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { Link } from 'react-router-dom'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { usePending } from '../lib/usePending'
 import { useAuth } from '../context/AuthContext'
@@ -11,6 +12,7 @@ import {
   FlagIcon,
   CheckIcon,
   ChevronDownIcon,
+  ChevronLeftIcon,
   UsersIcon,
   SearchIcon,
 } from '../icons'
@@ -827,11 +829,20 @@ export default function Goals() {
   return (
     <div className="space-y-4">
       <header className="flex items-end justify-between gap-3">
-        <div>
-          <p className="eyebrow">Selah · Goals</p>
-          <h1 className="mt-0.5 text-2xl">
-            Group Targets<span className="text-brand">.</span>
-          </h1>
+        <div className="flex items-center gap-1">
+          <Link
+            to="/disciple"
+            aria-label="Back to discipleship"
+            className="btn-ghost h-10 w-10 p-0"
+          >
+            <ChevronLeftIcon width={20} height={20} />
+          </Link>
+          <div>
+            <p className="eyebrow">Selah · Goals</p>
+            <h1 className="mt-0.5 text-2xl">
+              Group Targets<span className="text-brand">.</span>
+            </h1>
+          </div>
         </div>
         <button onClick={() => setModal({ type: 'goal' })} className="btn-primary shrink-0">
           <PlusIcon width={14} height={14} /> New

@@ -1,345 +1,239 @@
-import { useState, useEffect, useMemo } from 'react'
-import { useAssistantPassage } from '../context/AssistantContext'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
-import { ChevronLeftIcon, ChevronRightIcon, PencilIcon } from '../icons'
+import { useAssistantPassage } from '../context/AssistantContext'
+import { useToast } from '../context/ToastContext'
+import { ChevronLeftIcon, ChevronRightIcon, ChevronDownIcon, PencilIcon, SearchIcon, BookOpenIcon, CheckIcon, XIcon, ShareIcon } from '../icons'
 import { BIBLE_BOOKS, getBook } from '../data/books'
+import { API_BIBLES, PUBLIC_BIBLES, bibleRequest, getBibleChapter, trackBibleView } from '../data/bible'
+import { LEGACY_BIBLES, getLegacyChapter } from '../data/bibleLegacy'
+import { formatSelectionReference } from '../../supabase/functions/_shared/bible.js'
+import { BibleReaderSheet, BibleLocationPicker, BibleSearch } from '../components/BibleReaderSheet'
 
-const bibleApiProvider = {
-  translations: [
-    { id: 'web', name: 'World English Bible' },
-    { id: 'kjv', name: 'King James Version' },
-    { id: 'bbe', name: 'Bible in Basic English' }
-  ],
-  async getChapter(book, chapter, translationId) {
-    const ref = encodeURIComponent(`${book} ${chapter}`),
-      response = await fetch(`https://bible-api.com/${ref}?translation=${translationId}`)
-    if (!response.ok) throw new Error(`Could not load ${book} ${chapter} (${response.status})`)
-    const data = await response.json()
-    return {
-      book,
-      chapter,
-      translation: translationId,
-      translationName: data.translation_name ?? translationId.toUpperCase(),
-      verses: (data.verses ?? []).map((v) => ({
-        verse: v.verse,
-        text: (v.text ?? '').trim()
-      }))
-    }
-  }
+const ALL_BIBLES = [...API_BIBLES, ...LEGACY_BIBLES, ...PUBLIC_BIBLES]
+function readStored(key, fallback) {
+  try { return JSON.parse(localStorage.getItem(key)) ?? fallback } catch { return fallback }
 }
-
-function createEsvProvider(apiToken) {
+function saveStored(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)) } catch { /* Reading works without storage. */ }
+}
+function savedPosition() {
+  const saved = readStored('bible:position', {})
+  const book = getBook(saved.book) ?? getBook('John')
   return {
-    translations: [{ id: 'esv', name: 'English Standard Version' }],
-    async getChapter(book, chapter) {
-      const params = new URLSearchParams({
-          q: `${book} ${chapter}`,
-          'include-passage-references': 'false',
-          'include-verse-numbers': 'true',
-          'include-first-verse-numbers': 'true',
-          'include-footnotes': 'false',
-          'include-headings': 'false',
-          'include-short-copyright': 'false',
-          'include-passage-horizontal-lines': 'false',
-          'include-heading-horizontal-lines': 'false',
-          'indent-poetry': 'false'
-        }),
-        response = await fetch(`https://api.esv.org/v3/passage/text/?${params}`, {
-          headers: { Authorization: `Token ${apiToken}` }
-        })
-      if (!response.ok) throw new Error(`Could not load ${book} ${chapter} (ESV ${response.status})`)
-      const passageText = (await response.json()).passages?.[0] ?? '',
-        verses = [],
-        parts = passageText.split(/\[(\d+)\]/)
-      for (let index = 1; index < parts.length; index += 2) {
-        const verseNumber = Number(parts[index]),
-          verseText = (parts[index + 1] ?? '').replace(/\s+/g, ' ').trim()
-        verseNumber && verseText && verses.push({ verse: verseNumber, text: verseText })
-      }
-      return {
-        book,
-        chapter,
-        translation: 'esv',
-        translationName: 'English Standard Version (ESV) — © Crossway',
-        verses
-      }
-    }
+    book: book.name, chapter: Math.min(book.chapters, Math.max(1, Math.trunc(Number(saved.chapter) || 3))),
+    translation: ALL_BIBLES.some((b) => b.id === saved.translation) ? saved.translation : 'nivuk',
   }
-}
-
-function createNltProvider(apiKey) {
-  return {
-    translations: [{ id: 'nlt', name: 'New Living Translation' }],
-    async getChapter(book, chapter) {
-      const ref = encodeURIComponent(`${book} ${chapter}`),
-        response = await fetch(`https://api.nlt.to/api/passages?ref=${ref}&version=NLT&key=${apiKey}`)
-      if (!response.ok) throw new Error(`Could not load ${book} ${chapter} (NLT ${response.status})`)
-      const html = await response.text(),
-        doc = new DOMParser().parseFromString(html, 'text/html'),
-        verses = []
-      doc.querySelectorAll('verse_export').forEach((verseEl) => {
-        const verseNumber = Number(verseEl.getAttribute('vn')),
-          clone = verseEl.cloneNode(true)
-        clone.querySelectorAll('.vn, .tn, .tn-ref, .a-tn, .sn, .sn-ref, h1, h2, h3, .subhead, .chapter-number').forEach((el) => el.remove())
-        const text = (clone.textContent ?? '').replace(/\s+/g, ' ').trim()
-        verseNumber && text && verses.push({ verse: verseNumber, text })
-      })
-      return {
-        book,
-        chapter,
-        translation: 'nlt',
-        translationName: 'New Living Translation (NLT) — © Tyndale',
-        verses
-      }
-    }
-  }
-}
-
-function createBibleProvider() {
-  const providers = [],
-    // TODO(reconstruction): original minified bundle hardcoded a literal ESV API token here
-    // (`Token <api-key>` bearer value seen inline in production JS). Replaced with an env var
-    // placeholder — pull the real value from the de-minified bundle / provider dashboard and
-    // wire it through your env config instead of committing it to source.
-    esvApiToken = import.meta.env.VITE_ESV_API_TOKEN ?? '',
-    // TODO(reconstruction): same as above — original bundle hardcoded a literal NLT API key here.
-    nltApiKey = import.meta.env.VITE_NLT_API_KEY ?? ''
-  providers.push(createEsvProvider(esvApiToken))
-  providers.push(createNltProvider(nltApiKey))
-  providers.push(bibleApiProvider)
-  const providerByTranslationId = new Map()
-  for (const provider of providers) {
-    for (const translation of provider.translations) {
-      providerByTranslationId.set(translation.id, provider)
-    }
-  }
-  return {
-    translations: providers.flatMap((provider) => provider.translations),
-    getChapter(book, chapter, translationId) {
-      return (providerByTranslationId.get(translationId) ?? bibleApiProvider).getChapter(book, chapter, translationId)
-    }
-  }
-}
-
-const bibleProvider = createBibleProvider(),
-  POSITION_STORAGE_KEY = 'bible:position'
-
-function loadSavedPosition() {
-  const defaultPosition = { book: 'John', chapter: 3, translation: 'web' }
-  try {
-    const stored = localStorage.getItem(POSITION_STORAGE_KEY)
-    if (!stored) return defaultPosition
-    const parsed = JSON.parse(stored),
-      book = getBook(parsed.book)
-    if (!book) return defaultPosition
-    const chapter = Math.min(Math.max(1, Number(parsed.chapter) || 1), book.chapters)
-    return {
-      book: book.name,
-      chapter,
-      translation: typeof parsed.translation == 'string' ? parsed.translation : defaultPosition.translation
-    }
-  } catch {
-    return defaultPosition
-  }
-}
-
-function formatVerseRange(book, chapter, verseNumbers) {
-  const ranges = []
-  let rangeStart = verseNumbers[0],
-    rangeEnd = verseNumbers[0]
-  for (let index = 1; index <= verseNumbers.length; index++) {
-    const next = verseNumbers[index]
-    if (next !== rangeEnd + 1) {
-      ranges.push(rangeStart === rangeEnd ? `${rangeStart}` : `${rangeStart}-${rangeEnd}`)
-      rangeStart = next
-    }
-    rangeEnd = next
-  }
-  return `${book} ${chapter}:${ranges.join(', ')}`
 }
 
 export default function BibleReader() {
   const navigate = useNavigate()
-  const savedPosition = loadSavedPosition()
-  const [book, setBook] = useState(savedPosition.book)
-  const [chapter, setChapter] = useState(savedPosition.chapter)
-  const [translation, setTranslation] = useState(savedPosition.translation)
+  const toast = useToast()
+  const [position, setPosition] = useState(savedPosition)
+  const { book, chapter, translation } = position
   const [chapterData, setChapterData] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(null)
-  const [selectedVerses, setSelectedVerses] = useState(new Set())
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [retry, setRetry] = useState(0)
+  const [catalogue, setCatalogue] = useState(null)
+  const [catalogueError, setCatalogueError] = useState('')
+  const [selected, setSelected] = useState(new Set())
+  const [sheet, setSheet] = useState(null)
+  const [fontSize, setFontSize] = useState(() => Math.min(28, Math.max(16, Number(readStored('bible:fontSize', 20)) || 20)))
+  const [font, setFont] = useState(() => readStored('bible:font', 'serif') === 'sans' ? 'sans' : 'serif')
+  const [verseMode, setVerseMode] = useState(() => readStored('bible:verseMode', false) === true)
+  const pendingVerse = useRef(null)
+  const articleRef = useRef(null)
+  const requestKey = `${book}:${chapter}:${translation}`
+  const current = chapterData?.requestKey === requestKey ? chapterData : null
+  const version = ALL_BIBLES.find((b) => b.id === translation)
   const bookInfo = getBook(book)
+  const apiTranslation = API_BIBLES.some((b) => b.id === translation)
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    setError(null)
-    setSelectedVerses(new Set())
-    bibleProvider
-      .getChapter(book, chapter, translation)
-      .then((result) => {
-        if (!cancelled) setChapterData(result)
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load')
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [book, chapter, translation])
+    bibleRequest({ action: 'bibles' }).then((data) => {
+      if (!cancelled) setCatalogue(data.translations)
+    }).catch((err) => { if (!cancelled) setCatalogueError(err.message) })
+    return () => { cancelled = true }
+  }, [retry])
 
   useEffect(() => {
-    localStorage.setItem(POSITION_STORAGE_KEY, JSON.stringify({ book, chapter, translation }))
-  }, [book, chapter, translation])
+    let cancelled = false
+    setLoading(true); setError(''); setChapterData(null); setSelected(new Set())
+    const load = LEGACY_BIBLES.some((b) => b.id === translation) ? getLegacyChapter : getBibleChapter
+    load(book, chapter, translation).then((data) => {
+      if (cancelled) return
+      setChapterData({ ...data, requestKey })
+      if (pendingVerse.current) {
+        const match = data.verses.find((v) => v.verse <= pendingVerse.current && (v.endVerse ?? v.verse) >= pendingVerse.current)
+        if (match) setSelected(new Set([match.verse]))
+      }
+    }).catch((err) => { if (!cancelled) setError(err.message || 'Could not load this chapter.') })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [book, chapter, translation, requestKey, retry])
 
-  const toggleVerse = (verseNumber) => {
-    setSelectedVerses((prev) => {
-      const next = new Set(prev)
-      if (next.has(verseNumber)) next.delete(verseNumber)
-      else next.add(verseNumber)
+  useEffect(() => {
+    if (!current || loading) return
+    trackBibleView(current.fumsToken)
+    if (pendingVerse.current) {
+      const target = current.verses.find((v) => v.verse <= pendingVerse.current && (v.endVerse ?? v.verse) >= pendingVerse.current)
+      pendingVerse.current = null
+      if (target) articleRef.current?.querySelector(`[data-verse="${target.verse}"]`)?.scrollIntoView({ block: 'center' })
+    }
+  }, [current, loading])
+  useEffect(() => { saveStored('bible:position', position) }, [position])
+  useEffect(() => { saveStored('bible:fontSize', fontSize) }, [fontSize])
+  useEffect(() => { saveStored('bible:font', font) }, [font])
+  useEffect(() => { saveStored('bible:verseMode', verseMode) }, [verseMode])
+
+  const selectedRows = useMemo(() => current?.verses.filter((v) => selected.has(v.verse)) ?? [], [current, selected])
+  const selection = useMemo(() => selectedRows.length ? {
+    reference: formatSelectionReference(book, chapter, selectedRows),
+    text: selectedRows.map((v) => v.text).join(' '), translation: current.translationName,
+  } : null, [selectedRows, book, chapter, current])
+  const assistantPassage = useMemo(() => current && !loading && !error ? {
+    reference: selection?.reference ?? `${book} ${chapter}`, translation: current.translationName,
+    verses: (selectedRows.length ? selectedRows : current.verses).map((v) => ({ verse: v.verse, text: v.text })),
+  } : null, [current, loading, error, selection, selectedRows, book, chapter])
+  useAssistantPassage(assistantPassage)
+
+  const paragraphs = useMemo(() => {
+    const groups = []
+    for (const verse of current?.verses ?? []) {
+      const key = verseMode ? verse.verse : verse.paragraph
+      if (!groups.length || groups.at(-1).key !== key) groups.push({ key, verses: [] })
+      groups.at(-1).verses.push(verse)
+    }
+    return groups
+  }, [current, verseMode])
+
+  function goTo(nextBook, nextChapter, verse = null) {
+    setSheet(null); setSelected(new Set()); pendingVerse.current = verse
+    if (nextBook === book && nextChapter === chapter && current && verse) {
+      const match = current.verses.find((v) => v.verse <= verse && (v.endVerse ?? v.verse) >= verse)
+      pendingVerse.current = null
+      if (match) {
+        setSelected(new Set([match.verse]))
+        articleRef.current?.querySelector(`[data-verse="${match.verse}"]`)?.scrollIntoView({ block: 'center' })
+      }
+    } else {
+      setPosition((p) => ({ ...p, book: nextBook, chapter: nextChapter }))
+      window.scrollTo({ top: 0 })
+    }
+  }
+  const firstChapter = book === 'Genesis' && chapter === 1
+  const lastChapter = book === 'Revelation' && chapter === 22
+  function changeChapter(delta) {
+    if ((delta < 0 && firstChapter) || (delta > 0 && lastChapter)) return
+    const index = BIBLE_BOOKS.findIndex((b) => b.name === book)
+    if (chapter + delta < 1) return goTo(BIBLE_BOOKS[index - 1].name, BIBLE_BOOKS[index - 1].chapters)
+    if (chapter + delta > bookInfo.chapters) return goTo(BIBLE_BOOKS[index + 1].name, 1)
+    goTo(book, chapter + delta)
+  }
+  function toggleVerse(verse) {
+    setSelected((previous) => {
+      const next = new Set(previous)
+      if (next.has(verse)) next.delete(verse); else next.add(verse)
       return next
     })
   }
-
-  const selection = useMemo(() => {
-    if (!chapterData || selectedVerses.size === 0) return null
-    const sortedVerseNumbers = [...selectedVerses].sort((a, b) => a - b),
-      text = chapterData.verses
-        .filter((verse) => selectedVerses.has(verse.verse))
-        .map((verse) => verse.text)
-        .join(' ')
-    return {
-      reference: formatVerseRange(book, chapter, sortedVerseNumbers),
-      text,
-      translation: chapterData.translationName
-    }
-  }, [chapterData, selectedVerses, book, chapter])
-
-  // What the assistant is allowed to quote: the verses highlighted if there
-  // is a selection, otherwise the whole open chapter.
-  const assistantPassage = useMemo(() => {
-    if (!chapterData) return null
-    const verses = selectedVerses.size
-      ? chapterData.verses.filter((verse) => selectedVerses.has(verse.verse))
-      : chapterData.verses
-    return {
-      reference: selection?.reference ?? `${book} ${chapter}`,
-      translation: chapterData.translationName,
-      verses: verses.map((verse) => ({ verse: verse.verse, text: verse.text })),
-    }
-  }, [chapterData, selectedVerses, selection, book, chapter])
-
-  useAssistantPassage(assistantPassage)
-
-  const changeChapter = (delta) => {
-    if (!bookInfo) return
-    let bookIndex = BIBLE_BOOKS.findIndex((bk) => bk.name === book)
-    const newChapter = chapter + delta
-    if (newChapter < 1) {
-      bookIndex = Math.max(0, bookIndex - 1)
-      setBook(BIBLE_BOOKS[bookIndex].name)
-      setChapter(BIBLE_BOOKS[bookIndex].chapters)
-      return
-    }
-    if (newChapter > bookInfo.chapters) {
-      bookIndex = Math.min(BIBLE_BOOKS.length - 1, bookIndex + 1)
-      setBook(BIBLE_BOOKS[bookIndex].name)
-      setChapter(1)
-      return
-    }
-    setChapter(newChapter)
+  async function shareSelection(share = false) {
+    const text = `${selection.text}\n\n${selection.reference} (${version.abbreviation})`
+    try {
+      if (share && navigator.share) await navigator.share({ title: selection.reference, text })
+      else { await navigator.clipboard.writeText(text); toast.success('Verses copied.') }
+    } catch (err) { if (err.name !== 'AbortError') toast.error('Could not copy or share. Please try again.') }
   }
 
-  return (
-    <div className="pb-24">
-      <div className="flex flex-wrap items-center gap-2">
-        <select
-          className="input max-w-[10rem]"
-          value={book}
-          onChange={(e) => {
-            setBook(e.target.value), setChapter(1)
-          }}
-        >
-          {BIBLE_BOOKS.map((bk) => (
-            <option value={bk.name} key={bk.name}>
-              {bk.name}
-            </option>
-          ))}
-        </select>
-        <select className="input max-w-[6rem]" value={chapter} onChange={(e) => setChapter(Number(e.target.value))}>
-          {Array.from({ length: bookInfo?.chapters ?? 1 }, (_, index) => index + 1).map((chapterNumber) => (
-            <option value={chapterNumber} key={chapterNumber}>
-              {chapterNumber}
-            </option>
-          ))}
-        </select>
-        <select className="input ml-auto max-w-[10rem]" value={translation} onChange={(e) => setTranslation(e.target.value)}>
-          {bibleProvider.translations.map((option) => (
-            <option value={option.id} key={option.id}>
-              {option.name}
-            </option>
-          ))}
-        </select>
+  return <div className="bible-reader pb-28">
+    <div className="mb-5 flex items-center justify-between">
+      <div><p className="eyebrow">The living Word</p><h1 className="mt-1 text-2xl">Bible</h1></div>
+      <div className="flex gap-1">
+        <button onClick={() => setSheet('appearance')} className="bible-icon-button font-serif text-xl" aria-label="Reading appearance">Aa</button>
+        <button onClick={() => setSheet('search')} className="bible-icon-button" aria-label="Search the Bible"><SearchIcon width={21} height={21} /></button>
       </div>
-      <div className="mt-6 flex items-center justify-between">
-        <button onClick={() => changeChapter(-1)} className="btn-ghost p-2.5" aria-label="Previous chapter">
-          <ChevronLeftIcon />
-        </button>
-        <h2 className="font-sans text-2xl font-semibold tracking-tight">
-          {book} {chapter}
-        </h2>
-        <button onClick={() => changeChapter(1)} className="btn-ghost p-2.5" aria-label="Next chapter">
-          <ChevronRightIcon />
-        </button>
-      </div>
-      {loading && (
-        <div className="mt-12 flex justify-center">
-          <span className="h-6 w-6 animate-spin rounded-full border-2 border-line border-t-brand" />
-        </div>
-      )}
-      {error && <p className="mt-8 text-center text-sm text-red-500">{error}</p>}
-
-      {chapterData && !loading && (
-        <article className="mt-5 animate-fade-in font-sans text-[1.2rem] leading-loose text-ink">
-          {chapterData.verses.map((verse) => (
-            <span
-              onClick={() => toggleVerse(verse.verse)}
-              className={`cursor-pointer rounded-md px-0.5 transition-colors ${
-                selectedVerses.has(verse.verse) ? 'bg-accent-wash text-ink ring-1 ring-accent/30' : 'hover:bg-raised'
-              }`}
-              key={verse.verse}
-            >
-              <sup className="mr-0.5 select-none align-super font-sans text-[0.62em] font-bold text-brand dark:text-brand">
-                {verse.verse}
-              </sup>
-              {verse.text}{' '}
-            </span>
-          ))}
-          <p className="mt-8 font-sans text-xs font-medium text-muted">{chapterData.translationName}</p>
-        </article>
-      )}
-      {selection &&
-        createPortal(
-          <div className="fixed inset-x-0 bottom-0 z-modal px-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
-            <div className="mx-auto flex max-w-xl animate-sheet-up items-center gap-3 rounded-2xl border border-line bg-canvas/85 p-3 pl-4 shadow-lift backdrop-blur-xl">
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold text-accent-ink">{selection.reference}</p>
-                <p className="truncate text-xs text-muted">{selection.text}</p>
-              </div>
-              <button
-                onClick={() => navigate('/devotion/new', { state: { verse: selection } })}
-                className="btn-primary shrink-0"
-              >
-                <PencilIcon width={16} height={16} /> Create devotion
-              </button>
-            </div>
-          </div>,
-          document.body
-        )}
     </div>
-  )
+
+    <div className="bible-navigation flex items-center gap-2 rounded-2xl border border-line bg-surface p-1.5 shadow-soft">
+      <button onClick={() => setSheet('passage')} className="flex min-h-12 min-w-0 flex-1 items-center gap-2 rounded-xl px-3 text-left" aria-label={`Choose passage, currently ${book} ${chapter}`}>
+        <BookOpenIcon width={19} height={19} className="shrink-0 text-brand-strong dark:text-brand" />
+        <span className="min-w-0 flex-1 truncate font-semibold">{book} {chapter}</span><ChevronDownIcon width={16} height={16} className="shrink-0 text-muted" />
+      </button>
+      <div className="h-6 w-px bg-line" />
+      <button onClick={() => setSheet('translation')} aria-label={`Choose translation, currently ${version.abbreviation}`} className="flex min-h-12 shrink-0 items-center gap-2 rounded-xl px-3 text-sm font-bold text-brand-strong dark:text-brand">
+        {version.abbreviation}<ChevronDownIcon width={14} height={14} />
+      </button>
+    </div>
+
+    <header className="pb-7 pt-10 text-center">
+      <p className="eyebrow">{bookInfo.testament === 'OT' ? 'Old' : 'New'} Testament</p>
+      <h2 className="mt-2 !font-serif text-4xl !font-normal tracking-tight">{book} <span className="text-brand-strong dark:text-brand">{chapter}</span></h2>
+      <p className="mt-3 text-xs text-muted">{version.name}</p>
+      <div className="mx-auto mt-6 h-px w-12 bg-brand/30" />
+    </header>
+
+    {loading && <div role="status" aria-label="Loading chapter" className="space-y-5 py-2">{[0,1,2].map((n) => <div key={n} className="space-y-3">{[100,96,100,74].map((width, i) => <div key={i} className="h-3 rounded bg-raised" style={{ width: `${width}%` }} />)}</div>)}<span className="sr-only">Loading chapter…</span></div>}
+    {error && <div role="alert" className="rounded-2xl border border-line bg-surface p-6 text-center">
+      <BookOpenIcon className="mx-auto text-muted" width={26} height={26} /><h3 className="mt-3 text-lg">Let’s try that again</h3>
+      <p className="mt-2 text-sm leading-relaxed text-muted">{error}</p>
+      <div className="mt-5 flex flex-wrap justify-center gap-2"><button onClick={() => setRetry((n) => n + 1)} className="btn-primary min-h-11">Retry</button><button onClick={() => setSheet('translation')} className="btn-outline min-h-11">Change version</button></div>
+    </div>}
+
+    {current && !loading && !error && <>
+      <article ref={articleRef} aria-label={`${book} ${chapter}, ${version.name}`} className={`bible-passage ${font === 'serif' ? 'font-serif' : 'font-sans'}`} style={{ fontSize: `${fontSize}px` }}>
+        {paragraphs.map((group, i) => <p key={`${group.key}-${i}`} className={verseMode ? 'mb-3' : 'mb-6'}>{group.verses.map((verse) => <span key={verse.verse}>
+          <span role="button" tabIndex={0} data-verse={verse.verse} aria-pressed={selected.has(verse.verse)} aria-label={`Select ${book} ${chapter}:${verse.label ?? verse.verse}`}
+            onClick={() => toggleVerse(verse.verse)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleVerse(verse.verse) } }}
+            className={`bible-verse ${selected.has(verse.verse) ? 'bible-verse-selected' : ''}`}>
+            <sup className="mr-1.5 select-none font-sans text-[0.55em] font-semibold text-brand-strong dark:text-brand">{verse.label ?? verse.verse}</sup>{verse.text}
+          </span>{' '}
+        </span>)}</p>)}
+      </article>
+      <p className="mt-7 text-center text-xs text-muted">Tap a verse to reflect, copy, or share.</p>
+      <div className="my-7 flex items-center justify-between gap-3 border-y border-line py-4">
+        <button onClick={() => changeChapter(-1)} disabled={firstChapter} className="btn-ghost min-h-12 !px-2 disabled:opacity-30"><ChevronLeftIcon width={18} height={18} /> Previous</button>
+        <span className="text-xs tabular-nums text-muted">{chapter} of {bookInfo.chapters}</span>
+        <button onClick={() => changeChapter(1)} disabled={lastChapter} className="btn-ghost min-h-12 !px-2 disabled:opacity-30">Next <ChevronRightIcon width={18} height={18} /></button>
+      </div>
+      <footer className="text-xs leading-relaxed text-muted"><p>{current.copyright || current.translationName}</p>{apiTranslation && <a className="mt-2 inline-block min-h-11 py-3 underline underline-offset-4" href="https://api.bible" target="_blank" rel="noreferrer">Scripture provided by API.Bible</a>}</footer>
+    </>}
+
+    {selection && !loading && !error && createPortal(<section aria-label="Selected verse actions" className="fixed inset-x-0 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-modal mx-auto max-w-xl px-3">
+      <div className="rounded-2xl border border-line bg-surface p-3 shadow-lift">
+        <div className="flex items-center justify-between gap-3 pl-1"><p className="text-sm font-semibold text-ink">{selection.reference} <span className="ml-1 text-xs text-muted">{version.abbreviation}</span></p><button onClick={() => setSelected(new Set())} className="bible-icon-button !h-11 !w-11" aria-label="Clear selected verses"><XIcon width={17} height={17} /></button></div>
+        <div className="grid grid-cols-3 gap-2">
+          <button onClick={() => shareSelection()} className="btn-outline min-h-12 !px-2">Copy</button>
+          <button onClick={() => shareSelection(true)} className="btn-outline min-h-12 !px-2"><ShareIcon width={16} height={16} /> Share</button>
+          <button onClick={() => navigate('/devotion/new', { state: { verse: selection } })} className="btn-primary min-h-12 !px-2"><PencilIcon width={16} height={16} /> Reflect</button>
+        </div>
+      </div>
+    </section>, document.body)}
+
+    {sheet && <BibleReaderSheet title={{ passage: 'Choose a passage', translation: 'Bible translations', appearance: 'Reading appearance', search: 'Search Scripture' }[sheet]} onClose={() => setSheet(null)}>
+      {sheet === 'passage' && <BibleLocationPicker currentBook={book} currentChapter={chapter} onSelect={goTo} />}
+      {sheet === 'translation' && <div className="space-y-3">
+        <p className="text-sm leading-relaxed text-muted">Find the words that help you understand. Your place stays the same when you switch.</p>
+        {catalogueError && <p className="rounded-xl bg-raised p-3 text-xs text-muted">Could not check subscription access. You can retry a version or use WEB, KJV, or BBE.</p>}
+        {ALL_BIBLES.map((option) => {
+          const unavailable = option.bibleId && catalogue && !catalogue.some((b) => b.id === option.id)
+          return <button key={option.id} disabled={unavailable} onClick={() => { setPosition((p) => ({ ...p, translation: option.id })); setSelected(new Set()); pendingVerse.current = null; setSheet(null) }} aria-pressed={translation === option.id}
+            className={`flex min-h-20 w-full items-center gap-3 rounded-2xl border p-4 text-left disabled:opacity-40 ${translation === option.id ? 'border-brand bg-brand-wash' : 'border-line bg-surface'}`}>
+            <span className="flex h-12 w-14 shrink-0 items-center justify-center rounded-xl bg-raised text-xs font-bold text-brand-strong dark:text-brand">{option.abbreviation}</span>
+            <span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-ink">{option.name}</span><span className="mt-1 block text-xs leading-relaxed text-muted">{unavailable ? 'Not enabled on the subscription' : option.description}</span></span>
+            {translation === option.id && <CheckIcon width={18} height={18} className="shrink-0 text-brand-strong dark:text-brand" />}
+          </button>
+        })}
+      </div>}
+      {sheet === 'appearance' && <div className="space-y-6">
+        <div><div className="flex items-center justify-between"><label htmlFor="bible-font-size" className="text-sm font-semibold">Text size</label><output className="text-sm tabular-nums text-muted">{fontSize}px</output></div>
+          <input id="bible-font-size" type="range" min="16" max="28" step="1" value={fontSize} onChange={(e) => setFontSize(Number(e.target.value))} className="mt-3 h-11 w-full accent-blue-600" /></div>
+        <div className="grid grid-cols-2 gap-2">{['serif','sans'].map((value) => <button key={value} onClick={() => setFont(value)} aria-pressed={font === value} className={`min-h-14 rounded-xl border ${value === 'serif' ? 'font-serif' : 'font-sans'} ${font === value ? 'border-brand bg-brand-wash' : 'border-line'}`}>{value === 'serif' ? 'Classic serif' : 'Modern sans'}</button>)}</div>
+        <label className="flex min-h-12 items-center justify-between gap-4 text-sm font-medium">One verse per line<input type="checkbox" checked={verseMode} onChange={(e) => setVerseMode(e.target.checked)} className="h-5 w-5 accent-blue-600" /></label>
+        <div className={`rounded-2xl bg-raised p-5 ${font === 'serif' ? 'font-serif' : 'font-sans'}`} style={{ fontSize, lineHeight: 1.85 }}>A quiet place to read, reflect, and draw closer to God.</div>
+      </div>}
+      {sheet === 'search' && (apiTranslation ? <BibleSearch translation={translation} abbreviation={version.abbreviation} onSelect={(location) => goTo(location.book, location.chapter, location.verse)} /> : <div className="space-y-4"><p className="text-sm text-muted">Full-Bible search is available in NIV UK, MSG, and AMP. Choose one to search.</p>{API_BIBLES.map((b) => <button key={b.id} className="btn-outline min-h-12 w-full" onClick={() => setPosition((p) => ({ ...p, translation: b.id }))}>{b.name}</button>)}</div>)}
+    </BibleReaderSheet>}
+  </div>
 }

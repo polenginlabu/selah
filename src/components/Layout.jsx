@@ -7,6 +7,7 @@ import { disableNotifications, enableNotifications, onForegroundMessage, sendTes
 import { usePwaInstall } from '../lib/pwaInstall'
 import {
   BellIcon,
+  BookOpenIcon,
   ChatIcon,
   DownloadIcon,
   FlagIcon,
@@ -16,7 +17,6 @@ import {
   PencilIcon,
   ShareIcon,
   SproutIcon,
-  TargetIcon,
   SunIcon,
   TrophyIcon,
   XIcon,
@@ -116,9 +116,9 @@ export function Layout() {
         >
           <div className="flex items-stretch justify-around px-2 py-1.5">
             <NavItem to="/" end icon={<PencilIcon width={20} height={20} />} label="Devotions" />
+            <NavItem to="/bible" icon={<BookOpenIcon width={20} height={20} />} label="Bible" />
+            <NavItem to="/disciple" icon={<SproutIcon width={20} height={20} />} label="Discipleship" />
             <NavItem to="/conquest" icon={<FlagIcon width={20} height={20} />} label="Conquest" />
-            <NavItem to="/disciple" icon={<SproutIcon width={20} height={20} />} label="Disciple" />
-            <NavItem to="/goals" icon={<TargetIcon width={20} height={20} />} label="Goals" />
             <NavItem to="/achievements" icon={<TrophyIcon width={20} height={20} />} label="Growth" />
           </div>
         </nav>
