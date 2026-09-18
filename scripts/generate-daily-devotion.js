@@ -168,8 +168,12 @@ async function main() {
   const prompt = buildDevotionPrompt({ dateISO: date, history, config })
   const model = args.model ?? env.BRIDGE_MODEL
 
-  // console.log(model, env.BRIDGE_URL);
-  // return;
+  // The workflow uploads .selah-debug/ as an artifact every run, so writing the
+  // prompt here makes the exact instruction visible in the Actions run without
+  // flooding the console with ~16k characters of brief.
+  saveRaw(date, 'prompt', prompt)
+  log(`model: ${model || 'default (BRIDGE_MODEL not set)'}`)
+  log(`prompt: ${prompt.length} characters (saved to .selah-debug/${date}-prompt.txt)`)
   log(`asking the agent for ${date} (this researches the web and takes a few minutes)`)
 
   const started = Date.now()

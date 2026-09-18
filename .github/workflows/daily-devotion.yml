@@ -156,3 +156,17 @@ jobs:
             /tmp/bridge.log
           if-no-files-found: ignore
           retention-days: 14
+
+      # The exact prompt sent to the agent, on every run. The generator writes
+      # .selah-debug/<date>-prompt.txt; this makes the instruction (and the
+      # admin's theme/teachers/translation for that day) downloadable from the
+      # Actions run without cluttering the log with the full ~16k-character brief.
+      - name: Upload prompt used
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selah-prompt-${{ github.run_id }}
+          path: |
+            .selah-debug/*-prompt.txt
+          if-no-files-found: ignore
+          retention-days: 14
