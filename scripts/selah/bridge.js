@@ -14,7 +14,7 @@ const DEFAULT_BRIDGE_URL = process.env.BRIDGE_URL ?? 'http://127.0.0.1:4098'
 // empties every other model once the monthly cap is hit, so it is the one that
 // actually runs. It researches properly (websearch + webfetch) but writes
 // shorter than the brief's 500-800 word target, which the validator catches.
-const DEFAULT_MODEL = process.env.BRIDGE_MODEL ?? 'opencode/big-pickle'
+export const DEFAULT_MODEL = process.env.BRIDGE_MODEL ?? 'opencode/big-pickle'
 
 const POLL_INTERVAL_MS = 2000
 // Research takes minutes, not seconds. The bridge's own job deadline is 10

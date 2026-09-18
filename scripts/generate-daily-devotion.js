@@ -24,7 +24,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { createClient } from '@supabase/supabase-js'
 import { buildDevotionPrompt, buildReformatPrompt } from './selah/prompt.js'
-import { runAgent, BridgeError } from './selah/bridge.js'
+import { runAgent, BridgeError, DEFAULT_MODEL } from './selah/bridge.js'
 import { extractJson, normalizeDevotion, toRow, DevotionError } from './selah/devotion.js'
 
 const HISTORY_LOOKBACK = 45
@@ -167,12 +167,15 @@ async function main() {
   // --- Generate ------------------------------------------------------------
   const prompt = buildDevotionPrompt({ dateISO: date, history, config })
   const model = args.model ?? env.BRIDGE_MODEL
+  // runAgent falls back to its own default when no model is passed, so log the
+  // model that will actually run — not just "default".
+  const effectiveModel = model || DEFAULT_MODEL
 
   // The workflow uploads .selah-debug/ as an artifact every run, so writing the
   // prompt here makes the exact instruction visible in the Actions run without
   // flooding the console with ~16k characters of brief.
   saveRaw(date, 'prompt', prompt)
-  log(`model: ${model || 'default (BRIDGE_MODEL not set)'}`)
+  log(`model: ${effectiveModel}${model ? '' : ' (fallback to bridge default)'}`)
   log(`prompt: ${prompt.length} characters (saved to .selah-debug/${date}-prompt.txt)`)
   log(`asking the agent for ${date} (this researches the web and takes a few minutes)`)
 
