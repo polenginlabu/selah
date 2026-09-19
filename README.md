@@ -67,6 +67,10 @@ token is reported through its browser tracker when Scripture is displayed. Licen
 chapters are not persisted to localStorage or the service worker cache. Run parser
 and canonical-book validation tests with `npm run bible:test`.
 
+Selecting a verse and tapping **Share** opens a shareable Scripture card drawn
+over the day's AI-generated background — see
+[Verse sharing with daily backgrounds](#verse-sharing-with-daily-backgrounds).
+
 ### Gamification
 Defined entirely as data in [`src/lib/gamification.js`](src/lib/gamification.js) — adding a tier or achievement is a content change, not a code change.
 
@@ -156,6 +160,14 @@ VITE_NLT_API_KEY=<nlt api key>
 | `npm run dev` | Vite dev server |
 | `npm run build` | Production build to `dist/` |
 | `npm run preview` | Serve the production build locally |
+| `npm run devotion:generate` | Generate and save today's devotion |
+| `npm run devotion:dry-run` | Same, printed instead of saved |
+| `npm run background:generate` | Generate, upload and record today's background image |
+| `npm run background:dry-run` | Same, but uploads and writes nothing |
+| `npm run devotion:test` | Devotion validator and background logic tests |
+| `npm run background:test` | Background theme, prompt and image-guard tests |
+| `npm run card:test` | Verse card typesetting tests |
+| `npm run bible:test` | Bible parser and canonical-book tests |
 
 ---
 
@@ -168,6 +180,7 @@ Supabase tables used by the client:
 | `profiles` | User profile data |
 | `user_stats` | XP, level, streak, totals |
 | `daily_devotions` | Generated daily SELAH devotion per user per day |
+| `daily_backgrounds` | One generated background image per date (metadata only; the image is in Firebase Storage) |
 | `devotions` | Journal entries with verse and translation |
 | `conquest_weeks` | Weekly conquest checklist state |
 | `conquest_recurring` | Recurring conquest task config |
@@ -221,6 +234,190 @@ npm run devotion:dry-run           # same, but prints instead of saving (needs n
 Trade-offs: a machine has to be running with opencode installed when the devotion is generated, and Big Pickle's free tier records its sessions, so it's fitting for a personal devotional — use the paid Zen models for anything confidential. If the Edge Functions are already deployed with `deepseek-v4-pro`, both paths can coexist; the first row written wins per `(user_id, date)`.
 
 Automation: a macOS LaunchAgent can run it daily, e.g. with `StartCalendarInterval Hour:6 Minute:50` and a zsh program of `cd "/path/to/selah-app" && node --experimental-strip-types scripts/generate-daily-devotion.js`. The script is idempotent, so an extra invocation is harmless.
+
+---
+
+## Verse sharing with daily backgrounds
+
+Select a verse in the Bible reader, tap **Share**, and SELAH renders a 1080×1920
+Scripture card: the verse, its reference, the translation, the SELAH wordmark,
+and the day's background image.
+
+The governing rule of this feature:
+
+> **AI generates the background. SELAH generates the Scripture card.**
+
+The image model is asked for background art and nothing else — no text, no
+letters, no verses, no typography, no logos, no people. Every glyph on the card
+is drawn by the app from the Bible API's own text. This is not a stylistic
+preference: a model asked to render Scripture produces misspelled,
+mis-attributed, un-selectable verses baked into a JPEG, and nobody downstream
+can correct it. The prohibition is asserted in
+`scripts/selah/background.test.js`, not just written in a prompt.
+
+### How it fits together
+
+```
+GitHub Action (nightly, 19:00 UTC / 03:00 Manila)
+  └─ scripts/generate-daily-background.js
+       ├─ themeForDate(date)          deterministic theme + light motif
+       ├─ runImageAgent()             OpenCode bridge → Nano Banana 2
+       ├─ toBackgroundWebp()          sharp → 1080×1920 WebP, q82
+       ├─ uploadBackground()          Firebase Storage (public, immutable)
+       └─ upsert daily_backgrounds    Supabase (metadata only)
+
+Browser
+  getLatestBackground()  →  image_url  →  <canvas>  →  navigator.share()
+```
+
+One image per day, shared by every user. The background is chosen by **date**,
+never by the verse — so everyone sharing a verse on 19 September gets the same
+art, and the cost is one image a day regardless of how many people share.
+
+**Themes.** Twenty devotional themes (`stillness`, `hope`, `ocean`, `sunrise`…)
+crossed with nine lighting motifs. 20 and 9 are coprime, so the pairing runs
+**180 days** before it repeats. Selection is deterministic: re-running for a
+past date asks for the same picture it asked for the first time.
+
+**Storage layout.** `selah/backgrounds/YYYY/MM/DD.webp`, e.g.
+`selah/backgrounds/2026/09/19.webp`.
+
+**Why Firebase and not Supabase Storage.** Supabase is the application database
+and its storage quota is kept for user content. These images are bulk,
+immutable and CDN-served. Only the metadata row lives in Supabase — the browser
+reads `image_url` and puts it in an `<img>`. There is no Firebase SDK on the
+client path for this feature and no credential of any kind.
+
+**Fallback.** A missing background is an ordinary outcome, not an error. The
+card falls back to yesterday's image, and failing that to a gradient drawn from
+SELAH's own palette. The Bible reader never breaks over a missing picture, and
+the card is always shareable.
+
+### Setup
+
+**1. Database**
+
+```bash
+supabase db push    # applies supabase/migrations/20260919b_daily_backgrounds.sql
+```
+
+**2. Firebase Storage**
+
+Enable Storage in the Firebase console, then apply the rules and the CORS
+policy:
+
+```bash
+firebase deploy --only storage                    # deploy/firebase/storage.rules
+gcloud storage buckets update gs://YOUR_BUCKET \
+  --cors-file=deploy/firebase/cors.json
+```
+
+The CORS step is **not optional**. The card is drawn into a `<canvas>` and
+exported with `toBlob()`; a cross-origin image drawn without CORS taints that
+canvas and `toBlob()` throws at the moment the user taps Share. The card
+therefore loads the background with `crossOrigin="anonymous"`, which only
+succeeds if the bucket sends those headers. Skip this and nothing errors
+visibly — backgrounds simply never appear and every card shows the gradient.
+
+Verify it:
+
+```bash
+curl -sI -H 'Origin: https://your-domain' \
+  'https://storage.googleapis.com/YOUR_BUCKET/selah/backgrounds/2026/09/19.webp' \
+  | grep -i access-control
+```
+
+**3. Secrets**
+
+| Secret | Where | What it is |
+| --- | --- | --- |
+| `FIREBASE_SERVICE_ACCOUNT` | GitHub Actions + `.env.local` | Service account JSON (raw or base64) with **Storage Object Admin**. Firebase console → Project settings → Service accounts → Generate new private key. |
+| `FIREBASE_STORAGE_BUCKET` | GitHub Actions + `.env.local` | e.g. `devotional-app-c2633.firebasestorage.app` |
+| `BACKGROUND_MODEL` | optional | Defaults to `google/gemini-3.1-flash-image` (Nano Banana 2). |
+
+`OPENCODE_AUTH_JSON`, `SUPABASE_SERVICE_ROLE_KEY` and `VITE_SUPABASE_URL` are
+already configured for the devotion job and are reused.
+
+Base64 is recommended for the service account — it avoids every newline and
+quoting problem in `.env` files and GitHub secrets:
+
+```bash
+base64 -i service-account.json | pbcopy
+```
+
+The service account can read and write every bucket in the project. It lives in
+the Action and on developer machines only; it must never reach the browser.
+
+### Running it
+
+```bash
+npm run background:dry-run                                    # generate + process, upload nothing
+node scripts/generate-daily-background.js --out /tmp/bg.webp  # dry-run and save the image to look at
+npm run background:generate                                   # the real thing
+node scripts/generate-daily-background.js --date 2026-09-19 --force   # regenerate one day
+```
+
+The local path needs the same agent stack as the devotion generator:
+
+```bash
+opencode serve --port 4097
+cd backend/bridge/opencode-bridge && npm start    # bridge on 4098
+```
+
+**Manual trigger in CI.** Actions → *Daily devotion and background* → Run
+workflow. Inputs: `date`, `force` (replaces an existing devotion **and**
+background), `background_model`, `skip_background`.
+
+### Reruns are free
+
+The generator checks for an existing background **before** generating, because
+an image costs money and a rerun must not:
+
+1. A `daily_backgrounds` row exists → stop, unless `--force`.
+2. No row, but the image is already in Firebase (a previous run died between
+   the upload and the insert) → reuse the image, just write the row.
+3. Neither → generate.
+
+Firebase is written before Supabase, deliberately. The row is the app's source
+of truth, so it must never point at an image that is not there. The worst case
+is an orphaned image, which step 2 turns into a free repair on the next run.
+
+### Troubleshooting
+
+**"The agent returned no image. Is … an image model?"** — the bridge completed
+but no image part came back. The error quotes whatever the model *did* say. The
+usual cause is `BACKGROUND_MODEL` pointing at a text model.
+
+**HTTP 429, `limit: 0`, free tier** — Gemini image generation has **no free
+tier**. The Google Cloud project behind the key needs billing enabled. A valid
+key that works fine for text will still return `limit: 0` for every image
+model; this is a billing setting, not a code problem.
+
+**"The returned bytes are not a PNG, JPEG, WebP or GIF image."** — something
+non-image came back. The raw bytes are saved to
+`.selah-debug/<date>-background-rejected.bin` and uploaded as a CI artifact.
+Formats are checked by magic bytes, not by a claimed MIME type, so prose that
+base64-decodes cleanly is still rejected.
+
+**"Firebase upload failed"** — check the service account has *Storage Object
+Admin* and that `FIREBASE_STORAGE_BUCKET` is the bucket **host**
+(`…firebasestorage.app`), not the project id. No metadata row is written when
+an upload fails, so the app keeps showing the previous background rather than a
+broken link.
+
+**Backgrounds exist in Firebase but cards show the gradient** — the bucket CORS
+rule is missing. See step 2 above.
+
+**Nothing at all happens on the card** — open the console. `getLatestBackground`
+warns rather than throws; a missing table (migration not pushed) or an RLS
+denial both surface there.
+
+### Future: the background gallery
+
+`daily_backgrounds` keeps every row rather than only today's, and
+`listBackgrounds({ limit, before })` in `src/data/dailyBackgrounds.js` already
+returns them newest-first. A "choose a previous background" picker is a UI
+change, not a migration.
 
 ---
 

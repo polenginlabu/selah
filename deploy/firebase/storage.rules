@@ -1,0 +1,31 @@
+rules_version = '2';
+
+// Firebase Storage rules for SELAH.
+//
+// The generated daily backgrounds are the ONLY thing in this bucket, and they
+// are deliberately world-readable: they are abstract landscapes with no text,
+// no user data and nothing identifying in them, they are served to every user
+// of the app, and public objects are delivered by Google's CDN without a token
+// check per view. The alternative — signed URLs — would expire underneath the
+// long-lived metadata rows in Supabase and silently break old verse cards.
+//
+// Writes are a different matter. Nothing that holds a Firebase client SDK may
+// write here: the nightly generator authenticates with a service account,
+// which bypasses these rules entirely. So the rules deny ALL client writes,
+// which is what keeps a leaked web API key from being able to fill the bucket.
+//
+// Deploy:  firebase deploy --only storage
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /selah/backgrounds/{year}/{month}/{file} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Anything else in the bucket is closed. Adding a feature that needs
+    // storage means adding a rule for it here, deliberately.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -21,11 +21,26 @@ ErrorDocument 404 /index.html
 # but that means the URL never changes between deploys, so nothing tells a
 # browser/CDN to fetch a fresh copy. Force revalidation on every request for
 # just these; lazy route chunks keep their per-build hash and can cache hard.
+#
+# `always` matters: a revalidation answers 304, and a plain `Header set` is
+# skipped on 304s, which lets an intermediary re-pin a response with no
+# policy on it.
 <IfModule mod_headers.c>
-  <FilesMatch "^(index\.html|app\.(js|css))$">
-    Header set Cache-Control "no-cache, must-revalidate"
+  # sw.js is the update mechanism for every installed client. Once the worker
+  # controls a page, navigations are served from its precache and the headers
+  # on index.html/app.js are never consulted — refetching sw.js is the ONLY
+  # thing that tells a device a new build exists. Left without a policy it
+  # gets heuristically cached by the host's edge layer, the update check keeps
+  # seeing the old bytes, and the device is stuck on the old build until a
+  # hard refresh bypasses the worker (which mobile browsers can't easily do).
+  <FilesMatch "^(index\.html|sw\.js|manifest\.json|app\.(js|css))$">
+    Header always set Cache-Control "no-cache, must-revalidate"
   </FilesMatch>
-  <FilesMatch "-[A-Za-z0-9_]{6,}\.(js|css)$">
-    Header set Cache-Control "public, max-age=31536000, immutable"
+  # Per-build hashed chunks. The character class includes - and _ because
+  # Vite's hashes are base64url, so a hash can itself contain them; matching
+  # only [A-Za-z0-9] would miss those chunks and drop them to heuristic
+  # caching.
+  <FilesMatch "-[A-Za-z0-9_-]{6,}\.(js|css)$">
+    Header always set Cache-Control "public, max-age=31536000, immutable"
   </FilesMatch>
 </IfModule>

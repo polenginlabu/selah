@@ -9,6 +9,7 @@ import { API_BIBLES, PUBLIC_BIBLES, bibleRequest, getBibleChapter, trackBibleVie
 import { LEGACY_BIBLES, getLegacyChapter } from '../data/bibleLegacy'
 import { formatSelectionReference } from '../../supabase/functions/_shared/bible.js'
 import { BibleReaderSheet, BibleLocationPicker, BibleSearch } from '../components/BibleReaderSheet'
+import { VerseCardSheet } from '../components/VerseCard'
 
 const ALL_BIBLES = [...API_BIBLES, ...LEGACY_BIBLES, ...PUBLIC_BIBLES]
 function readStored(key, fallback) {
@@ -39,6 +40,7 @@ export default function BibleReader() {
   const [catalogueError, setCatalogueError] = useState('')
   const [selected, setSelected] = useState(new Set())
   const [sheet, setSheet] = useState(null)
+  const [cardOpen, setCardOpen] = useState(false)
   const [fontSize, setFontSize] = useState(() => Math.min(28, Math.max(16, Number(readStored('bible:fontSize', 20)) || 20)))
   const [font, setFont] = useState(() => readStored('bible:font', 'serif') === 'sans' ? 'sans' : 'serif')
   const [verseMode, setVerseMode] = useState(() => readStored('bible:verseMode', false) === true)
@@ -139,12 +141,14 @@ export default function BibleReader() {
       return next
     })
   }
-  async function shareSelection(share = false) {
+  // Sharing moved into the verse card sheet, which offers the image and keeps
+  // a text option of its own. This is now only the clipboard.
+  async function copySelection() {
     const text = `${selection.text}\n\n${selection.reference} (${version.abbreviation})`
     try {
-      if (share && navigator.share) await navigator.share({ title: selection.reference, text })
-      else { await navigator.clipboard.writeText(text); toast.success('Verses copied.') }
-    } catch (err) { if (err.name !== 'AbortError') toast.error('Could not copy or share. Please try again.') }
+      await navigator.clipboard.writeText(text)
+      toast.success('Verses copied.')
+    } catch { toast.error('Could not copy. Please try again.') }
   }
 
   return <div className="bible-reader pb-28">
@@ -204,12 +208,14 @@ export default function BibleReader() {
       <div className="rounded-2xl border border-line bg-surface p-3 shadow-lift">
         <div className="flex items-center justify-between gap-3 pl-1"><p className="text-sm font-semibold text-ink">{selection.reference} <span className="ml-1 text-xs text-muted">{version.abbreviation}</span></p><button onClick={() => setSelected(new Set())} className="bible-icon-button !h-11 !w-11" aria-label="Clear selected verses"><XIcon width={17} height={17} /></button></div>
         <div className="grid grid-cols-3 gap-2">
-          <button onClick={() => shareSelection()} className="btn-outline min-h-12 !px-2">Copy</button>
-          <button onClick={() => shareSelection(true)} className="btn-outline min-h-12 !px-2"><ShareIcon width={16} height={16} /> Share</button>
+          <button onClick={copySelection} className="btn-outline min-h-12 !px-2">Copy</button>
+          <button onClick={() => setCardOpen(true)} className="btn-outline min-h-12 !px-2"><ShareIcon width={16} height={16} /> Share</button>
           <button onClick={() => navigate('/devotion/new', { state: { verse: selection } })} className="btn-primary min-h-12 !px-2"><PencilIcon width={16} height={16} /> Reflect</button>
         </div>
       </div>
     </section>, document.body)}
+
+    {cardOpen && selection && <VerseCardSheet selection={selection} translation={version.abbreviation} onClose={() => setCardOpen(false)} />}
 
     {sheet && <BibleReaderSheet title={{ passage: 'Choose a passage', translation: 'Bible translations', appearance: 'Reading appearance', search: 'Search Scripture' }[sheet]} onClose={() => setSheet(null)}>
       {sheet === 'passage' && <BibleLocationPicker currentBook={book} currentChapter={chapter} onSelect={goTo} />}

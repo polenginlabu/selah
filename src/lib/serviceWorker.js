@@ -11,6 +11,7 @@
 
 export const SERVICE_WORKER_PATH = '/sw.js'
 const LEGACY_PATH = '/firebase-messaging-sw.js'
+const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000
 
 let registrationPromise = null
 
@@ -46,6 +47,16 @@ export function registerServiceWorker({ onUpdateReady } = {}) {
         registration.update().catch(() => {})
       }
     })
+
+    // visibilitychange covers backgrounding, and register() above covers a
+    // cold start — but a tab left open and in the foreground for hours hits
+    // neither, and would sit on the old build until the browser's own ~24h
+    // check. Poll while visible so a deploy lands within the hour.
+    setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        registration.update().catch(() => {})
+      }
+    }, UPDATE_CHECK_INTERVAL_MS)
 
     // A new build is precached but waiting behind the current one. Let the app
     // decide when to swap — reloading underneath someone mid-devotion is worse

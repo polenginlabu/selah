@@ -154,6 +154,65 @@ function extractTextFromParts(parts) {
 }
 
 /**
+ * Extracts generated IMAGE parts from an OpenCode message.
+ *
+ * Added for the SELAH daily background job, which prompts an image model
+ * (Nano Banana / google/gemini-3.1-flash-image) rather than a text one, so the
+ * thing worth keeping is bytes rather than prose. extractTextFromParts above
+ * drops everything that is not `type: "text"`, which for an image run is the
+ * entire answer.
+ *
+ * The part shape is read defensively. OpenCode normalises providers behind its
+ * own part schema, but an image reply can arrive as an inline data: URL, as a
+ * URL to fetch, or as a file OpenCode has already written to disk, and which
+ * one you get depends on the provider and the version. Rather than guess, this
+ * records every plausible carrier and lets the caller resolve it; anything
+ * unrecognised is reported by type in `unknown` so a surprise is diagnosable
+ * from the job result instead of silently becoming "no image".
+ *
+ * @param {Array} parts
+ * @returns {{images: Array<object>, unknown: string[]}}
+ */
+function extractImagesFromParts(parts) {
+  const images = [];
+  const unknown = [];
+  if (!Array.isArray(parts)) return { images, unknown };
+
+  for (const part of parts) {
+    const type = part?.type;
+    if (!type || type === "text" || type === "reasoning" || type === "step-start" ||
+        type === "step-finish" || type === "tool" || type === "patch" ||
+        type === "snapshot" || type === "agent") {
+      continue;
+    }
+
+    const mime = part.mime || part.mediaType || part.contentType || "";
+    const url = part.url || part.source?.url || "";
+    const path = part.path || part.filename || part.source?.path || part.source?.text?.value || "";
+    // Some shapes carry raw base64 directly rather than as a data: URL.
+    const data = typeof part.data === "string" ? part.data
+      : typeof part.image === "string" ? part.image
+      : typeof part.base64 === "string" ? part.base64
+      : "";
+
+    const looksLikeImage =
+      mime.startsWith("image/") ||
+      url.startsWith("data:image/") ||
+      /\.(png|jpe?g|webp|gif)$/i.test(url || path);
+
+    if ((type === "file" || type === "image") && (url || path || data)) {
+      if (looksLikeImage || !mime) {
+        images.push({ mime: mime || null, url: url || null, path: path || null, data: data || null });
+        continue;
+      }
+    }
+    unknown.push(type);
+  }
+
+  return { images, unknown };
+}
+
+/**
  * Resolve a model string to OpenCode model object format.
  * Accepts plain model IDs (eg: "qwen3-coder-next") or "provider/model".
  * Returns null if model is not found.
@@ -239,6 +298,10 @@ function createChatJob(message, model) {
     error: null,
     tools: [],
     failedTools: [],
+    // Generated image parts, for image-model runs (the SELAH daily background).
+    // Empty for every ordinary text run.
+    images: [],
+    unknownParts: [],
     sessionId: null,
     createdAt: now,
     updatedAt: now,
@@ -251,12 +314,13 @@ function updateJob(job, patch) {
   Object.assign(job, patch, { updatedAt: Date.now() });
 }
 
-function completeJob(job, responseText, model, sessionId) {
+function completeJob(job, responseText, model, sessionId, images) {
   updateJob(job, {
     done: true,
     phase: "done",
     message: "Completed",
     response: responseText || "",
+    images: images || job.images || [],
     model: model || job.model,
     sessionId: sessionId || job.sessionId,
   });
@@ -399,6 +463,8 @@ async function executeChatJob(job, message, model) {
     const failedTool = getFailedToolName(assistantMessage);
     const completedTools = getCompletedToolNames(assistantMessage);
     const nextResponseText = getTextFromMessageItem(assistantMessage);
+    const { images: nextImages, unknown: unknownPartTypes } =
+      extractImagesFromParts(assistantMessage?.parts);
     const finish = assistantMessage?.info?.finish || "";
     const completedAt = assistantMessage?.info?.time?.completed || 0;
     const signature = [
@@ -409,6 +475,10 @@ async function executeChatJob(job, message, model) {
       finish,
       completedAt,
       nextResponseText.length,
+      // An image model can answer with bytes and no prose at all. Without this
+      // the signature never changes, the run looks stalled, and the stall
+      // guard below kills a job that actually succeeded.
+      nextImages.length,
       (assistantMessage?.parts || []).length,
     ].join("|");
 
@@ -431,6 +501,15 @@ async function executeChatJob(job, message, model) {
     if (failedTool && !job.failedTools.includes(failedTool)) {
       job.failedTools.push(failedTool);
       console.log(`[chat-job] tool failed (continuing): ${failedTool}`);
+    }
+
+    if (nextImages.length !== job.images.length) {
+      job.images = nextImages;
+      job.unknownParts = unknownPartTypes;
+      updateJob(job, {
+        phase: "responding",
+        message: `OpenCode returned ${nextImages.length} image part(s)`,
+      });
     }
 
     if (nextResponseText && nextResponseText !== responseText) {
@@ -491,7 +570,7 @@ async function executeChatJob(job, message, model) {
     await new Promise((resolve) => setTimeout(resolve, 1500));
   }
 
-  if (!responseText && Date.now() >= deadline) {
+  if (!responseText && job.images.length === 0 && Date.now() >= deadline) {
     throw new Error("OpenCode request timed out after 10 minutes");
   }
 
@@ -500,7 +579,7 @@ async function executeChatJob(job, message, model) {
     { role: "ai", content: responseText }
   );
 
-  completeJob(job, responseText, modelToUse || "default", localSessionId);
+  completeJob(job, responseText, modelToUse || "default", localSessionId, job.images);
 }
 
 // ─── Helper: ensure an active session exists ─────────────────────────────────
@@ -917,6 +996,8 @@ app.get("/api/chat/status/:jobId", (req, res) => {
     sessionId: job.sessionId,
     tools: job.tools,
     failedTools: job.failedTools,
+    images: job.images,
+    unknownParts: job.unknownParts,
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
   });
@@ -957,6 +1038,8 @@ app.get("/api/chat/result/:jobId", (req, res) => {
     success: true,
     done: true,
     response: job.response,
+    images: job.images,
+    unknownParts: job.unknownParts,
     model: job.model,
     sessionId: job.sessionId,
   });

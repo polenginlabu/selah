@@ -1,6 +1,12 @@
-name: Daily devotion
+name: Daily devotion and background
 
-# Generates one SELAH devotion for the day and writes it to Supabase.
+# Generates the day's SELAH content: one devotion, and one background image for
+# the Scripture-sharing verse cards.
+#
+# Both run in ONE job on purpose. The expensive part of this workflow is
+# standing up the agent stack (a ~150 MB OpenCode install plus the bridge), and
+# the background generator talks to exactly the same bridge the devotion does.
+# A second job would pay that cost twice for one extra model call.
 #
 # The whole agent stack — `opencode serve` and the bridge — is started inside
 # the runner, used, and thrown away with it. Nothing persistent runs anywhere:
@@ -14,6 +20,10 @@ name: Daily devotion
 #   SUPABASE_SERVICE_ROLE_KEY   Supabase > Project Settings > API > service_role.
 #                               Bypasses every RLS policy; only this job uses it.
 #   VITE_SUPABASE_URL           already set for the deploy workflow; reused here.
+#   FIREBASE_SERVICE_ACCOUNT    a Firebase service account JSON key, base64 or raw,
+#                               with the Storage Object Admin role. Writes the
+#                               generated backgrounds; never reaches the browser.
+#   FIREBASE_STORAGE_BUCKET     e.g. devotional-app-c2633.firebasestorage.app
 
 on:
   schedule:
@@ -38,7 +48,16 @@ on:
         required: false
         type: string
       force:
-        description: "Replace the day's devotion if one already exists"
+        description: "Replace the day's devotion AND background if they already exist"
+        required: false
+        type: boolean
+        default: false
+      background_model:
+        description: 'Override the image model, e.g. google/gemini-3.1-flash-image'
+        required: false
+        type: string
+      skip_background:
+        description: 'Generate only the devotion, no background image'
         required: false
         type: boolean
         default: false
@@ -49,7 +68,7 @@ permissions:
 # Never let two runs generate at once: each costs several minutes of agent
 # research, and the second would be discarded anyway.
 concurrency:
-  group: daily-devotion
+  group: daily-content
   cancel-in-progress: false
 
 jobs:
@@ -142,6 +161,31 @@ jobs:
           [ "${{ inputs.force }}" = "true" ] && ARGS="$ARGS --force"
           # shellcheck disable=SC2086
           node scripts/generate-daily-devotion.js $ARGS
+
+      # Runs even when the devotion step failed. The two are independent
+      # products: a devotion rejected for being 380 words instead of 500 says
+      # nothing about whether an image can be generated, and skipping the
+      # background would leave every verse card on the fallback gradient over
+      # an unrelated failure. If the bridge itself is dead this fails fast on
+      # its own health check.
+      #
+      # The job still reports failure if either step failed — `!cancelled()`
+      # changes when this runs, not whether the workflow passes.
+      - name: Generate today's background
+        if: ${{ !cancelled() && inputs.skip_background != true }}
+        env:
+          SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_STORAGE_BUCKET: ${{ secrets.FIREBASE_STORAGE_BUCKET }}
+          BRIDGE_URL: http://127.0.0.1:4098
+        run: |
+          ARGS=""
+          [ -n "${{ inputs.date }}" ] && ARGS="$ARGS --date ${{ inputs.date }}"
+          [ -n "${{ inputs.background_model }}" ] && ARGS="$ARGS --model ${{ inputs.background_model }}"
+          [ "${{ inputs.force }}" = "true" ] && ARGS="$ARGS --force"
+          # shellcheck disable=SC2086
+          node scripts/generate-daily-background.js $ARGS
 
       # Agent output that failed validation. Keeps a bad night diagnosable
       # without paying for another research run.

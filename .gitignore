@@ -14,6 +14,14 @@ dist
 supabase/.temp/
 **/supabase/.temp/
 
+# Firebase service account keys. These grant read/write to every bucket in the
+# project, so the filenames the console hands out are blocked by pattern rather
+# than relying on anyone remembering. The key belongs in .env.local (as
+# FIREBASE_SERVICE_ACCOUNT) or a GitHub secret, never in a file in the repo.
+*service-account*.json
+firebase-adminsdk-*.json
+serviceAccountKey*.json
+
 # Generator artifacts. .selah-debug holds agent output that failed validation,
 # kept locally so a bad run can be diagnosed without paying for another.
 .selah-debug/
