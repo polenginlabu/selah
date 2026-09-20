@@ -17,7 +17,9 @@
     "background:test": "node --test scripts/selah/background.test.js",
     "card:test": "node --test src/lib/*.test.js",
     "firebase:setup": "node scripts/setup-firebase-storage.js",
-    "firebase:check": "node scripts/setup-firebase-storage.js --check"
+    "firebase:check": "node scripts/setup-firebase-storage.js --check",
+    "background:upload": "node scripts/upload-background.js",
+    "check:cache": "node scripts/check-deploy-cache.js"
   },
   "dependencies": {
     "@lottiefiles/dotlottie-react": "^0.19.16",

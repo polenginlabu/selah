@@ -33,7 +33,7 @@ ErrorDocument 404 /index.html
   # gets heuristically cached by the host's edge layer, the update check keeps
   # seeing the old bytes, and the device is stuck on the old build until a
   # hard refresh bypasses the worker (which mobile browsers can't easily do).
-  <FilesMatch "^(index\.html|sw\.js|manifest\.json|app\.(js|css))$">
+  <FilesMatch "^(index\.html|sw\.js|version\.json|manifest\.json|app\.(js|css))$">
     Header always set Cache-Control "no-cache, must-revalidate"
   </FilesMatch>
   # Per-build hashed chunks. The character class includes - and _ because

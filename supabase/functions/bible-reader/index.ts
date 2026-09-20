@@ -50,7 +50,11 @@ Deno.serve(async (req) => {
     if (body.action === 'chapter') {
       if (!validChapter(body.bookId, body.chapter)) return json({ error: 'Invalid chapter.' }, 400)
       const { data: chapter, meta } = await upstream(`bibles/${translation.bibleId}/chapters/${body.bookId}.${body.chapter}`, {
-        'content-type': 'json', 'include-notes': 'false', 'include-titles': 'false',
+        // include-titles brings the section headings ("Jesus Feeds the Five
+        // Thousand") that translators place above a pericope. They arrive as
+        // para nodes with a style of s1/s2/ms, which parseChapterContent keeps
+        // separate from the verse text — they are editorial, not Scripture.
+        'content-type': 'json', 'include-notes': 'false', 'include-titles': 'true',
         'include-chapter-numbers': 'false', 'include-verse-numbers': 'true', 'include-verse-spans': 'true',
       })
       return json({

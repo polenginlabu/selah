@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { BibleReaderSheet } from './BibleReaderSheet'
 import { useToast } from '../context/ToastContext'
-import { getLatestBackground } from '../data/dailyBackgrounds'
+import { listBackgrounds } from '../data/dailyBackgrounds'
 import { DownloadIcon, ShareIcon } from '../icons'
 import { CARD_WIDTH, CARD_HEIGHT, MARGIN_X, layoutCard, quoteVerse } from '../lib/verseCardLayout'
 
@@ -172,8 +172,43 @@ export function VerseCardSheet({ selection, translation, onClose }) {
   const canvasRef = useRef(null)
   const [busy, setBusy] = useState(false)
   const [ready, setReady] = useState(false)
+  const [backgrounds, setBackgrounds] = useState([])
+  const [selectedBackground, setSelectedBackground] = useState(null)
+  const [bgResolved, setBgResolved] = useState(false)
+  const imageCache = useRef(new Map())
 
+  // An image picked once is reused for later redraws, so switching between
+  // tiles is instant instead of re-fetching it over the network each time.
+  const getCachedImage = useCallback(async (background) => {
+    if (!background) return null
+    if (imageCache.current.has(background.id)) return imageCache.current.get(background.id)
+    const img = await loadImage(background.imageUrl)
+    imageCache.current.set(background.id, img)
+    return img
+  }, [])
+
+  // Load every generated background once. The newest is pre-selected so the
+  // card starts the way it did before; the user can then switch to any other
+  // image. A failed fetch keeps today's behaviour: the gradient.
   useEffect(() => {
+    let cancelled = false
+
+    ;(async () => {
+      const list = await listBackgrounds({ limit: 100 }).catch(() => [])
+      if (cancelled) return
+      setBackgrounds(list)
+      setSelectedBackground((current) => current ?? list[0] ?? null)
+      setBgResolved(true)
+    })()
+
+    return () => { cancelled = true }
+  }, [])
+
+  // Redraw whenever the verse, the translation or the chosen background
+  // changes. Drawing waits for bgResolved so the card never flashes the
+  // gradient before the selection is known.
+  useEffect(() => {
+    if (!bgResolved) return
     let cancelled = false
 
     ;(async () => {
@@ -181,10 +216,7 @@ export function VerseCardSheet({ selection, translation, onClose }) {
       // has not finished loading, and the card would ship in Times.
       await document.fonts?.ready?.catch?.(() => {})
 
-      // Today's background, or the most recent one if the night's run has not
-      // happened. Null is fine — drawCard paints the gradient instead.
-      const background = await getLatestBackground().catch(() => null)
-      const image = await loadImage(background?.imageUrl)
+      const image = await getCachedImage(selectedBackground)
       if (cancelled || !canvasRef.current) return
 
       drawCard(canvasRef.current, {
@@ -196,7 +228,7 @@ export function VerseCardSheet({ selection, translation, onClose }) {
     })()
 
     return () => { cancelled = true }
-  }, [selection, translation])
+  }, [bgResolved, selection, translation, selectedBackground, getCachedImage])
 
   const withCardFile = useCallback(async (use) => {
     const canvas = canvasRef.current
@@ -253,6 +285,37 @@ export function VerseCardSheet({ selection, translation, onClose }) {
             style={{ aspectRatio: `${CARD_WIDTH} / ${CARD_HEIGHT}` }}
           />
         </div>
+
+        {bgResolved && backgrounds.length > 0 && (
+          <div>
+            <p className="mb-2 text-sm font-medium text-muted">Background</p>
+            <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+              <button
+                onClick={() => setSelectedBackground(null)}
+                aria-pressed={selectedBackground === null}
+                aria-label="Plain background"
+                className={`flex h-16 w-12 shrink-0 items-center justify-center rounded-lg border-2 ${selectedBackground === null ? 'border-brand' : 'border-line'}`}
+                style={{ background: 'linear-gradient(180deg,#16264A,#0A1226)' }}
+              >
+                <span className="text-[8px] font-bold uppercase tracking-wider text-white/70">Plain</span>
+              </button>
+              {backgrounds.map((bg) => {
+                const active = selectedBackground?.id === bg.id
+                return (
+                  <button
+                    key={bg.id}
+                    onClick={() => setSelectedBackground(bg)}
+                    aria-pressed={active}
+                    aria-label={bg.theme ? `Background: ${bg.theme}` : 'Background'}
+                    className={`h-16 w-12 shrink-0 overflow-hidden rounded-lg border-2 ${active ? 'border-brand' : 'border-line'}`}
+                  >
+                    <img src={bg.imageUrl} alt={bg.theme ?? ''} loading="lazy" draggable={false} className="block h-full w-full object-cover" />
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-2">
           <button onClick={shareImage} disabled={!ready || busy} className="btn-primary min-h-12 disabled:opacity-40">

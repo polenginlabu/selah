@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { useAssistantPassage } from '../context/AssistantContext'
 import { useToast } from '../context/ToastContext'
+import { useAuth } from '../context/AuthContext'
 import { ChevronLeftIcon, ChevronRightIcon, ChevronDownIcon, PencilIcon, SearchIcon, BookOpenIcon, CheckIcon, XIcon, ShareIcon } from '../icons'
 import { BIBLE_BOOKS, getBook } from '../data/books'
 import { API_BIBLES, PUBLIC_BIBLES, bibleRequest, getBibleChapter, trackBibleView } from '../data/bible'
@@ -10,6 +11,7 @@ import { LEGACY_BIBLES, getLegacyChapter } from '../data/bibleLegacy'
 import { formatSelectionReference } from '../../supabase/functions/_shared/bible.js'
 import { BibleReaderSheet, BibleLocationPicker, BibleSearch } from '../components/BibleReaderSheet'
 import { VerseCardSheet } from '../components/VerseCard'
+import { getReadingPosition, saveReadingPosition } from '../data/readingPosition'
 
 const ALL_BIBLES = [...API_BIBLES, ...LEGACY_BIBLES, ...PUBLIC_BIBLES]
 function readStored(key, fallback) {
@@ -30,6 +32,7 @@ function savedPosition() {
 export default function BibleReader() {
   const navigate = useNavigate()
   const toast = useToast()
+  const { user } = useAuth()
   const [position, setPosition] = useState(savedPosition)
   const { book, chapter, translation } = position
   const [chapterData, setChapterData] = useState(null)
@@ -46,6 +49,13 @@ export default function BibleReader() {
   const [verseMode, setVerseMode] = useState(() => readStored('bible:verseMode', false) === true)
   const pendingVerse = useRef(null)
   const articleRef = useRef(null)
+  // Cross-device sync bookkeeping. hydratedRef gates server writes until the
+  // account position has been read (so opening the reader never clobbers it),
+  // and the position refs stop a slow fetch from yanking the reader back if
+  // the user has already moved on to another chapter.
+  const hydratedRef = useRef(false)
+  const initialPositionRef = useRef(position)
+  const latestPositionRef = useRef(position)
   const requestKey = `${book}:${chapter}:${translation}`
   const current = chapterData?.requestKey === requestKey ? chapterData : null
   const version = ALL_BIBLES.find((b) => b.id === translation)
@@ -86,6 +96,38 @@ export default function BibleReader() {
     }
   }, [current, loading])
   useEffect(() => { saveStored('bible:position', position) }, [position])
+  useEffect(() => {
+    latestPositionRef.current = position
+    if (user && hydratedRef.current) saveReadingPosition(user.id, position).catch(() => {})
+  }, [position, user])
+
+  // Restore the account copy once when the reader opens. The server position
+  // wins over localStorage when present; hydration is skipped if the user has
+  // already navigated while it was in flight.
+  useEffect(() => {
+    let cancelled = false
+    if (!user) {
+      hydratedRef.current = false
+      return
+    }
+    getReadingPosition(user.id)
+      .then((saved) => {
+        if (cancelled) return
+        hydratedRef.current = true
+        if (!saved) return
+        if (latestPositionRef.current !== initialPositionRef.current) return
+        const bookInfo = getBook(saved.book)
+        if (!bookInfo) return
+        setPosition((p) => ({
+          ...p,
+          book: bookInfo.name,
+          chapter: Math.min(bookInfo.chapters, Math.max(1, Math.trunc(Number(saved.chapter) || 1))),
+          translation: ALL_BIBLES.some((b) => b.id === saved.translation) ? saved.translation : p.translation,
+        }))
+      })
+      .catch(() => { hydratedRef.current = true })
+    return () => { cancelled = true }
+  }, [user])
   useEffect(() => { saveStored('bible:fontSize', fontSize) }, [fontSize])
   useEffect(() => { saveStored('bible:font', font) }, [font])
   useEffect(() => { saveStored('bible:verseMode', verseMode) }, [verseMode])
@@ -105,7 +147,10 @@ export default function BibleReader() {
     const groups = []
     for (const verse of current?.verses ?? []) {
       const key = verseMode ? verse.verse : verse.paragraph
-      if (!groups.length || groups.at(-1).key !== key) groups.push({ key, verses: [] })
+      // A heading always starts a new block, even mid-paragraph: it is rendered
+      // as its own element above the text, which cannot happen inside a <p>.
+      const startsBlock = !groups.length || groups.at(-1).key !== key || verse.heading
+      if (startsBlock) groups.push({ key, heading: verse.heading ?? null, verses: [] })
       groups.at(-1).verses.push(verse)
     }
     return groups
@@ -187,13 +232,16 @@ export default function BibleReader() {
 
     {current && !loading && !error && <>
       <article ref={articleRef} aria-label={`${book} ${chapter}, ${version.name}`} className={`bible-passage ${font === 'serif' ? 'font-serif' : 'font-sans'}`} style={{ fontSize: `${fontSize}px` }}>
-        {paragraphs.map((group, i) => <p key={`${group.key}-${i}`} className={verseMode ? 'mb-3' : 'mb-6'}>{group.verses.map((verse) => <span key={verse.verse}>
+        {paragraphs.map((group, i) => <div key={`${group.key}-${i}`}>
+          {group.heading && <h3 className="mb-3 mt-8 font-display text-[0.8em] font-bold uppercase leading-snug tracking-[0.1em] text-brand-strong first:mt-0 dark:text-brand">{group.heading}</h3>}
+          <p className={verseMode ? 'mb-3' : 'mb-6'}>{group.verses.map((verse) => <span key={verse.verse}>
           <span role="button" tabIndex={0} data-verse={verse.verse} aria-pressed={selected.has(verse.verse)} aria-label={`Select ${book} ${chapter}:${verse.label ?? verse.verse}`}
             onClick={() => toggleVerse(verse.verse)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleVerse(verse.verse) } }}
             className={`bible-verse ${selected.has(verse.verse) ? 'bible-verse-selected' : ''}`}>
             <sup className="mr-1.5 select-none font-sans text-[0.55em] font-semibold text-brand-strong dark:text-brand">{verse.label ?? verse.verse}</sup>{verse.text}
           </span>{' '}
-        </span>)}</p>)}
+        </span>)}</p>
+        </div>)}
       </article>
       <p className="mt-7 text-center text-xs text-muted">Tap a verse to reflect, copy, or share.</p>
       <div className="my-7 flex items-center justify-between gap-3 border-y border-line py-4">

@@ -33,7 +33,9 @@ export async function getBibleChapter(book, chapter, translation) {
   if (!data.verses?.length) throw new Error('No verses were returned for this chapter.')
   return {
     translation, translationName: data.translation_name, abbreviation: translation.toUpperCase(),
-    verses: data.verses.map((v) => ({ verse: v.verse, endVerse: v.verse, label: String(v.verse), text: v.text.trim(), paragraph: Math.floor((v.verse - 1) / 5) })),
+    // bible-api.com serves bare public-domain text — these translations have
+    // no section headings to show. heading: null keeps one shape for the reader.
+    verses: data.verses.map((v) => ({ verse: v.verse, endVerse: v.verse, label: String(v.verse), text: v.text.trim(), heading: null, paragraph: Math.floor((v.verse - 1) / 5) })),
   }
 }
 

@@ -35,7 +35,18 @@ export function registerServiceWorker({ onUpdateReady } = {}) {
       console.warn('Could not retire the legacy service worker', err)
     }
 
-    const registration = await navigator.serviceWorker.register(SERVICE_WORKER_PATH)
+    // updateViaCache: 'none' makes the browser bypass its HTTP cache for the
+    // worker AND everything the worker importScripts(). The default, 'imports',
+    // only bypasses it for sw.js itself — so the Firebase compat scripts it
+    // imports could be served from cache during an update check, which is one
+    // more way a device can sit on old code. This costs nothing: sw.js is 27 KB
+    // and it is fetched on update checks, not on every page load.
+    //
+    // It does NOT help against a CDN/edge cache in front of the origin — only
+    // the Cache-Control header on sw.js can do that (see public/.htaccess).
+    const registration = await navigator.serviceWorker.register(SERVICE_WORKER_PATH, {
+      updateViaCache: 'none',
+    })
 
     // A new build is precached but the browser only checks for updates on
     // navigation and roughly once a day. That is why a fresh deploy sometimes

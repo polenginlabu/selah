@@ -24,6 +24,9 @@ name: Daily devotion and background
 #                               with the Storage Object Admin role. Writes the
 #                               generated backgrounds; never reaches the browser.
 #   FIREBASE_STORAGE_BUCKET     e.g. devotional-app-c2633.firebasestorage.app
+#   GEMINI_API_KEY              optional. Only the image model needs it, and
+#                               only if OpenCode's google provider is not
+#                               already authenticated by auth.json.
 
 on:
   schedule:
@@ -178,6 +181,15 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_STORAGE_BUCKET: ${{ secrets.FIREBASE_STORAGE_BUCKET }}
+          # Optional, and only for the image model. OpenCode reaches Gemini
+          # through its `google` provider, which takes its key from auth.json —
+          # except where a config sets `apiKey: "{env:GEMINI_API_KEY}"`, which
+          # resolves to EMPTY when the variable is unset and fails with a 403
+          # "unregistered caller" rather than anything mentioning credentials.
+          # The runner has no such config today, so auth.json is used and this
+          # is unnecessary; setting the secret makes the job independent of
+          # that staying true.
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           BRIDGE_URL: http://127.0.0.1:4098
         run: |
           ARGS=""

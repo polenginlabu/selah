@@ -384,6 +384,31 @@ cd backend/bridge/opencode-bridge && npm start    # bridge on 4098
 workflow. Inputs: `date`, `force` (replaces an existing devotion **and**
 background), `background_model`, `skip_background`.
 
+### Uploading backgrounds by hand
+
+The AI generator is the normal path, but it needs a billing-enabled Gemini key.
+`scripts/upload-background.js` does the identical second half — resize to
+1080×1920 WebP, upload to Firebase, write the metadata row — from images you
+already have. **The app cannot tell the difference**: it reads the
+`daily_backgrounds` row either way, so the whole feature works with no model
+spend at all.
+
+```bash
+npm run background:upload -- --file sunrise.jpg                    # today
+npm run background:upload -- --file sunrise.jpg --date 2026-09-21  # one date
+npm run background:upload -- --file ./backgrounds/ --date 2026-09-21   # a folder
+npm run background:upload -- --file x.jpg --dry-run                # process only
+```
+
+Passing a **directory** fills consecutive dates from `--date`, in filename
+order — the quickest way to cover a fortnight in one command. Existing dates
+are skipped unless `--force` is passed, so re-running is safe.
+
+Any size or aspect ratio is accepted; `cover` crops to 9:16 from the centre.
+Pick calm images with uncluttered middles — the verse is set over that area.
+Rows are recorded with `model: 'manual-upload'` so hand-picked and generated
+backgrounds stay distinguishable later.
+
 ### Reruns are free
 
 The generator checks for an existing background **before** generating, because

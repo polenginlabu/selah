@@ -9,6 +9,7 @@ import { ToastProvider } from './context/ToastContext'
 import { AssistantProvider } from './context/AssistantContext'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { registerServiceWorker, reloadOnControllerChange } from './lib/serviceWorker'
+import { watchForUpdates } from './lib/appVersion'
 import { startOutbox } from './lib/outbox'
 import './index.css'
 
@@ -44,3 +45,9 @@ registerServiceWorker({
     applyUpdate()
   },
 })
+
+// Backstop for the above. The worker can only update itself if the browser is
+// able to fetch a fresh sw.js, and a cache layer we do not control can prevent
+// that indefinitely — which is what leaves people hard-refreshing to see a
+// deploy. This asks the origin directly, with a URL no cache has seen before.
+watchForUpdates()

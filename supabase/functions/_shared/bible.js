@@ -14,16 +14,48 @@ export function validChapter(bookId, chapter) {
   return index >= 0 && Number.isInteger(chapter) && chapter > 0 && chapter <= CHAPTER_COUNTS[index]
 }
 
+// USX paragraph styles that are a heading rather than Scripture:
+//   s, s1..s4  section heading      "Jesus Feeds the Five Thousand"
+//   ms, ms1..  major section        "BOOK ONE"
+//   mr, sr     the reference line under one, "(Matthew 14:13-21)"
+//   d          descriptive title    a psalm's "A Psalm of David"
+//   sp         speaker              "Job:" in the poetic dialogues
+const HEADING_STYLES = /^(s\d*|ms\d*|mr|sr|d|sp)$/
+
+/** Every text descendant of a node, concatenated. */
+function collectText(node) {
+  if (!node || typeof node !== 'object') return ''
+  if (node.type === 'text' && typeof node.text === 'string') return node.text
+  return (node.items ?? []).map(collectText).join('')
+}
+
 // JSON content avoids executing provider HTML. MSG's verse bridges must stay
 // together (e.g. 1–2), while AMP's nested italic/Jesus-speech nodes stay intact.
+//
+// Section headings are returned SEPARATELY from verse text, attached to the
+// verse they introduce. They are the translators' editorial apparatus, not
+// inspired text — different publishers word them differently and they carry no
+// verse number — so they must never end up inside a verse, inside a selection,
+// or on a shared verse card.
 export function parseChapterContent(content) {
   const nodes = typeof content === 'string' ? JSON.parse(content) : content
   if (!Array.isArray(nodes)) throw new Error('Unexpected Scripture content format.')
   const verses = new Map()
   let paragraph = -1
+  let pendingHeading = null
   function walk(node, inheritedId) {
     if (!node || typeof node !== 'object') return
     if (['verse', 'chapter', 'note'].includes(node.name)) return
+
+    // A heading para is captured whole and NOT descended into, so its words
+    // cannot leak into the verse that follows. It is held until the next verse
+    // appears, which is the one it introduces.
+    if (node.name === 'para' && HEADING_STYLES.test(node.attrs?.style ?? '')) {
+      const text = collectText(node).replace(/\s+/g, ' ').trim()
+      if (text) pendingHeading = pendingHeading ? `${pendingHeading} — ${text}` : text
+      return
+    }
+
     if (node.name === 'para') paragraph += 1
     const id = node.attrs?.verseId || inheritedId
     if (node.type === 'text' && id && typeof node.text === 'string') {
@@ -31,10 +63,13 @@ export function parseChapterContent(content) {
       if (!matches.length) throw new Error('Unexpected verse identifier.')
       const start = matches[0]
       const end = matches.at(-1)
-      if (!verses.has(id)) verses.set(id, {
-        id, verse: start, endVerse: end, label: start === end ? String(start) : `${start}–${end}`,
-        paragraph: Math.max(paragraph, 0), text: '',
-      })
+      if (!verses.has(id)) {
+        verses.set(id, {
+          id, verse: start, endVerse: end, label: start === end ? String(start) : `${start}–${end}`,
+          paragraph: Math.max(paragraph, 0), text: '', heading: pendingHeading,
+        })
+        pendingHeading = null
+      }
       verses.get(id).text += node.text
     }
     for (const child of node.items ?? []) walk(child, id)
