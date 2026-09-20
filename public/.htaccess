@@ -35,6 +35,12 @@ ErrorDocument 404 /index.html
   # hard refresh bypasses the worker (which mobile browsers can't easily do).
   <FilesMatch "^(index\.html|sw\.js|version\.json|manifest\.json|app\.(js|css))$">
     Header always set Cache-Control "no-cache, must-revalidate"
+    # Cache-Control alone was not enough: Hostinger's CDN was seen replacing it
+    # with `public, max-age=604800` on sw.js. These are the headers a CDN reads
+    # in preference to Cache-Control, so they state the same intent in the
+    # dialect the edge actually listens to. Harmless where unsupported.
+    Header always set CDN-Cache-Control "no-cache, no-store, must-revalidate"
+    Header always set Surrogate-Control "no-store"
   </FilesMatch>
   # Per-build hashed chunks. The character class includes - and _ because
   # Vite's hashes are base64url, so a hash can itself contain them; matching

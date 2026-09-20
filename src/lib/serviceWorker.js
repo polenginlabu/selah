@@ -9,7 +9,22 @@
  * the browser kept both around under slightly different scopes.
  */
 
-export const SERVICE_WORKER_PATH = '/sw.js'
+import { BUILD_ID } from './appVersion'
+
+// The worker is registered at a URL that CHANGES EVERY BUILD.
+//
+// Hostinger's CDN (server: hcdn) was observed serving /sw.js with
+// `public, max-age=604800` and an Age of 31 hours, overriding the origin's
+// `no-cache` on some edge nodes. A stale worker never learns a new build
+// exists, so it keeps serving the previous app shell from its precache and
+// only a hard refresh — which bypasses the worker entirely — shows new code.
+//
+// A per-build query string sidesteps the whole class of problem: the URL is
+// one no cache has ever seen, so it cannot be served from any cache, at any
+// layer. The query does not affect the worker's scope (still "/"), and
+// registering a different script URL at the same scope replaces the previous
+// registration rather than creating a second one.
+export const SERVICE_WORKER_PATH = `/sw.js?v=${encodeURIComponent(BUILD_ID)}`
 const LEGACY_PATH = '/firebase-messaging-sw.js'
 const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000
 
@@ -29,7 +44,11 @@ export function registerServiceWorker({ onUpdateReady } = {}) {
     // alongside the new one during the changeover.
     try {
       for (const existing of await navigator.serviceWorker.getRegistrations()) {
-        if (existing.active?.scriptURL?.endsWith(LEGACY_PATH)) await existing.unregister()
+        // pathname, so the ?v= build stamp does not defeat the match.
+        const path = existing.active?.scriptURL
+          ? new URL(existing.active.scriptURL).pathname
+          : ''
+        if (path === LEGACY_PATH) await existing.unregister()
       }
     } catch (err) {
       console.warn('Could not retire the legacy service worker', err)
