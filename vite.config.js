@@ -60,6 +60,32 @@ export default defineConfig({
         // The Bible reader can pull a large chapter payload; the default 2 MiB
         // cap would silently drop assets from the precache.
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
+        // THE STALE-APP BUG.
+        //
+        // vite-plugin-pwa emits `revision: null` for everything Vite built,
+        // because Vite normally content-hashes its output and a hashed URL is
+        // its own version. This config overrides entryFileNames to the stable
+        // `assets/app.js` (see build.rollupOptions below), which breaks that
+        // assumption: `revision: null` tells Workbox the URL is immutable, so
+        // it precaches app.js ONCE and never re-fetches it again on any later
+        // build. The worker then serves a fresh index.html next to a months-old
+        // app.js, which is the app silently reverting to an old version after
+        // the post-activation reload — and why only a hard refresh, which
+        // bypasses the worker entirely, showed the new code.
+        //
+        // Anything genuinely content-hashed keeps revision: null, which is
+        // correct and keeps those entries out of every future precache diff.
+        manifestTransforms: [
+          (entries) => ({
+            manifest: entries.map((entry) => {
+              if (entry.revision) return entry
+              // Vite/Rollup hashes: `name-A1b2C3d4.ext`, base64url alphabet.
+              const hashed = /[.-][A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+$/.test(entry.url)
+              return hashed ? entry : { ...entry, revision: BUILD_ID }
+            }),
+            warnings: [],
+          }),
+        ],
       },
       devOptions: { enabled: false },
     }),

@@ -182,6 +182,17 @@ export default function DevotionEditor() {
     if (!isNew) return
     const draft = getDraft('new')
     if (draft) {
+      const hasContent = Boolean(
+        (draft.title || '').trim() ||
+          (draft.tags && draft.tags.length) ||
+          (draft.verse && draft.verse.text && draft.verse.text.trim()) ||
+          (draft.soap && Object.values(draft.soap).some((value) => typeof value === 'string' && value.trim())) ||
+          (draft.body || '').trim()
+      )
+      if (!hasContent) {
+        clearDraft('new')
+        return
+      }
       setMethod(draft.method)
       setTitle(draft.title)
       setDate(draft.date)
@@ -265,7 +276,7 @@ export default function DevotionEditor() {
     clearDraft(isNew ? 'new' : id)
     setDraftRestored(false)
     isNew &&
-      (setMethod('soap'),
+      (setMethod(localStorage.getItem('preferred-method') || 'soap'),
       setTitle(''),
       setDate(todayISO()),
       setVerse(verseFromState),
@@ -313,7 +324,14 @@ export default function DevotionEditor() {
         </label>
         <label className="block">
           <span className="mb-1 block text-[0.65rem] font-semibold uppercase tracking-wide text-muted">Method</span>
-          <select className="input text-sm" value={method} onChange={(event) => setMethod(event.target.value)}>
+          <select
+            className="input text-sm"
+            value={method}
+            onChange={(event) => {
+              setMethod(event.target.value)
+              localStorage.setItem('preferred-method', event.target.value)
+            }}
+          >
             {Object.entries(DEVOTION_METHOD_LABELS).map(([value, label]) => (
               <option value={value} key={value}>
                 {label}
