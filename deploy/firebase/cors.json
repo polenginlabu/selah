@@ -1,21 +1,5 @@
 [
   {
-    "_comment": [
-      "CORS for the SELAH backgrounds bucket.",
-      "",
-      "The verse card is drawn into a <canvas> and exported with toBlob(). A",
-      "cross-origin image drawn without CORS taints that canvas and toBlob()",
-      "throws a SecurityError at the moment the user taps Share. The card",
-      "therefore loads the background with crossOrigin='anonymous', and that",
-      "request only succeeds if the bucket returns these headers.",
-      "",
-      "Without this rule nothing breaks visibly — the image just fails to load",
-      "and every card falls back to the gradient. That is the symptom to look",
-      "for if backgrounds exist in Firebase but never appear on a card.",
-      "",
-      "Apply:  gcloud storage buckets update gs://YOUR_BUCKET --cors-file=deploy/firebase/cors.json",
-      "Verify: curl -sI -H 'Origin: https://your-domain' 'https://storage.googleapis.com/YOUR_BUCKET/selah/backgrounds/2026/09/19.webp' | grep -i access-control"
-    ],
     "origin": ["*"],
     "method": ["GET", "HEAD"],
     "responseHeader": ["Content-Type", "Cache-Control"],

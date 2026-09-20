@@ -303,14 +303,22 @@ supabase db push    # applies supabase/migrations/20260919b_daily_backgrounds.sq
 
 **2. Firebase Storage**
 
-Enable Storage in the Firebase console, then apply the rules and the CORS
-policy:
+Enable Storage in the Firebase console if you never have. Then, once the
+secrets in step 3 are in `.env.local`:
 
 ```bash
-firebase deploy --only storage                    # deploy/firebase/storage.rules
-gcloud storage buckets update gs://YOUR_BUCKET \
-  --cors-file=deploy/firebase/cors.json
+npm run firebase:check    # confirm the bucket is reachable, change nothing
+npm run firebase:setup    # apply deploy/firebase/cors.json to the bucket
 ```
+
+This deliberately needs **no `gcloud` and no Firebase CLI** — it authenticates
+with the same service account the generator already uses, through the
+`@google-cloud/storage` client that `firebase-admin` bundles. If `npm ci` has
+run, it works.
+
+Security rules are the one thing it cannot do: rules are a Firebase concept
+with no GCS API behind them. Paste `deploy/firebase/storage.rules` into the
+Firebase console under **Storage → Rules** and hit Publish.
 
 The CORS step is **not optional**. The card is drawn into a `<canvas>` and
 exported with `toBlob()`; a cross-origin image drawn without CORS taints that
@@ -322,9 +330,7 @@ visibly — backgrounds simply never appear and every card shows the gradient.
 Verify it:
 
 ```bash
-curl -sI -H 'Origin: https://your-domain' \
-  'https://storage.googleapis.com/YOUR_BUCKET/selah/backgrounds/2026/09/19.webp' \
-  | grep -i access-control
+npm run firebase:check    # prints the bucket's current CORS configuration
 ```
 
 **3. Secrets**
@@ -338,12 +344,22 @@ curl -sI -H 'Origin: https://your-domain' \
 `OPENCODE_AUTH_JSON`, `SUPABASE_SERVICE_ROLE_KEY` and `VITE_SUPABASE_URL` are
 already configured for the devotion job and are reused.
 
-Base64 is recommended for the service account — it avoids every newline and
-quoting problem in `.env` files and GitHub secrets:
+The service account can be supplied three ways, and the right one differs by
+environment:
+
+| Where | Form | Why |
+| --- | --- | --- |
+| Local `.env.local` | **absolute path** to the `.json` | No encoding step to get wrong, and the key stays outside the repo |
+| GitHub Actions | **base64** of the file | A GitHub secret and a `.env` parser both mangle the newlines in the private key |
+| Anywhere | raw JSON | Works, but only through a real env var — a multi-line blob will not survive `.env` line parsing |
 
 ```bash
-base64 -i service-account.json | pbcopy
+base64 -i firebase-sa.json | pbcopy    # for the GitHub secret
 ```
+
+On macOS `-i` is required; `base64 file` reports `invalid argument`. Watch for
+a glob matching two downloaded keys — `base64 -i a.json b.json` consumes the
+`-i` and fails on the second file.
 
 The service account can read and write every bucket in the project. It lives in
 the Action and on developer machines only; it must never reach the browser.

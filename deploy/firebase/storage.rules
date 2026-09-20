@@ -14,7 +14,9 @@ rules_version = '2';
 // which bypasses these rules entirely. So the rules deny ALL client writes,
 // which is what keeps a leaked web API key from being able to fill the bucket.
 //
-// Deploy:  firebase deploy --only storage
+// Apply: paste this into the Firebase console under Storage > Rules and
+// Publish. (There is no GCS API for rules, so the setup script in
+// scripts/setup-firebase-storage.js cannot do this part for you.)
 service firebase.storage {
   match /b/{bucket}/o {
     match /selah/backgrounds/{year}/{month}/{file} {

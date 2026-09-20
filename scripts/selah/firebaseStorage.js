@@ -10,6 +10,7 @@
 // service account key can read and write every bucket in the project; the app
 // gets a plain download URL and nothing else.
 
+import { readFileSync, existsSync } from 'node:fs'
 import { initializeApp, cert, getApps } from 'firebase-admin/app'
 import { getStorage } from 'firebase-admin/storage'
 
@@ -21,11 +22,22 @@ export class StorageError extends Error {
 }
 
 /**
- * Reads the service account from the environment.
+ * Reads the service account, however it was supplied.
  *
- * Accepts raw JSON or base64 — GitHub secrets handle both, but a pasted
- * multi-line JSON blob is the one people reliably get wrong, so base64 is
- * offered as the more robust option and detected automatically.
+ * Three accepted forms, because the right one differs by environment:
+ *
+ *   - a PATH to the downloaded .json    best locally: the key stays in one
+ *                                       file outside the repo, and there is no
+ *                                       shell encoding step to get wrong
+ *   - base64 of that file's contents    best in CI: survives GitHub secrets
+ *                                       and .env parsing, which both mangle
+ *                                       the newlines inside the private key
+ *   - the raw JSON itself               accepted, but a multi-line blob in a
+ *                                       .env file will not survive the line
+ *                                       parser, so it only works via real env
+ *
+ * Detected rather than configured: a leading '{' is JSON, an existing file is
+ * a path, anything else is treated as base64.
  */
 export function parseServiceAccount(value) {
   if (!value?.trim()) {
@@ -33,16 +45,30 @@ export function parseServiceAccount(value) {
       'Missing FIREBASE_SERVICE_ACCOUNT. See README > Daily background generation.'
     )
   }
-  const text = value.trim().startsWith('{')
-    ? value.trim()
-    : Buffer.from(value.trim(), 'base64').toString('utf8')
+  const trimmed = value.trim()
+
+  let text
+  if (trimmed.startsWith('{')) {
+    text = trimmed
+  } else if (trimmed.length < 4096 && !trimmed.includes('\n') && existsSync(trimmed)) {
+    // Length/newline guard so a base64 blob is never accidentally handed to
+    // existsSync, which throws on very long or NUL-bearing strings.
+    try {
+      text = readFileSync(trimmed, 'utf8')
+    } catch (err) {
+      throw new StorageError(`Could not read the service account at ${trimmed}: ${err.message}`)
+    }
+  } else {
+    text = Buffer.from(trimmed, 'base64').toString('utf8')
+  }
 
   let parsed
   try {
     parsed = JSON.parse(text)
   } catch {
     throw new StorageError(
-      'FIREBASE_SERVICE_ACCOUNT is neither JSON nor base64-encoded JSON.'
+      'FIREBASE_SERVICE_ACCOUNT is not a readable service account. Expected one of: ' +
+      'a path to the downloaded .json, base64 of that file, or the raw JSON.'
     )
   }
   for (const key of ['project_id', 'client_email', 'private_key']) {

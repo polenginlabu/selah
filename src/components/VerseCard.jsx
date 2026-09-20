@@ -104,7 +104,11 @@ function paintPauseMark(ctx, x, y, height) {
   const rounded = (bx, fill) => {
     ctx.fillStyle = fill
     ctx.beginPath()
-    ctx.roundRect(bx, y - height, barW, height, r)
+    // roundRect is missing on iOS Safari before 16.4. Without the guard the
+    // whole card throws while drawing the wordmark — the last thing painted —
+    // so the user would watch it render and then get nothing.
+    if (ctx.roundRect) ctx.roundRect(bx, y - height, barW, height, r)
+    else ctx.rect(bx, y - height, barW, height)
     ctx.fill()
   }
   rounded(x, '#FFFFFF')
