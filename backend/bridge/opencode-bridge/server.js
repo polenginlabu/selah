@@ -50,6 +50,19 @@ const BRIDGE_HOST = process.env.BRIDGE_HOST || "127.0.0.1";
 // by a secret). Set it anywhere the bridge is reachable from the internet.
 const BRIDGE_TOKEN = process.env.BRIDGE_TOKEN || "";
 
+// How long a job may show no observable change before it is called stalled.
+//
+// These were fixed at 60s/120s, tuned for the devotion — whose tools are web
+// searches that return in seconds. An agent doing real work is different: it
+// reads several files and runs a database query, and OpenCode reports no part
+// change while a single tool is mid-flight. A consolidation run was killed at
+// exactly 60s with "stalled while running tool: read" when nothing was wrong.
+//
+// Configurable so the slow job can be patient without making the nightly
+// devotion slow to notice a genuine hang.
+const TOOL_STALL_MS = Number(process.env.BRIDGE_TOOL_STALL_MS || 60000);
+const IDLE_STALL_MS = Number(process.env.BRIDGE_IDLE_STALL_MS || 120000);
+
 // Password for OpenCode itself, which is a SEPARATE problem from BRIDGE_TOKEN.
 //
 // BRIDGE_TOKEN guards the front door. This guards the back one: OpenCode
@@ -667,10 +680,13 @@ async function executeChatJob(job, message, model) {
     }
 
     const stalledForMs = Date.now() - lastProgressAt;
-    if (runningTool && stalledForMs > 60000) {
-      throw new Error(`OpenCode stalled while running tool: ${runningTool}`);
+    if (runningTool && stalledForMs > TOOL_STALL_MS) {
+      throw new Error(
+        `OpenCode stalled while running tool: ${runningTool} ` +
+          `(no change for ${Math.round(TOOL_STALL_MS / 1000)}s — raise BRIDGE_TOOL_STALL_MS if the tool is simply slow)`
+      );
     }
-    if (!runningTool && stalledForMs > 120000) {
+    if (!runningTool && stalledForMs > IDLE_STALL_MS) {
       // Say WHY where we can. A provider that refused the request leaves its
       // reason on a message we were not looking at; reporting "stalled" alone
       // sends people hunting for a hang that never happened.

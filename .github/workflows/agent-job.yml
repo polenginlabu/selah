@@ -56,6 +56,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # The consolidation task tells the agent to query public.discipleship_signals.
+      # Without a client it has no way to do that, and the run dies as a stalled
+      # tool rather than saying what it actually needed.
+      - name: Install PostgreSQL client
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -105,6 +111,7 @@ jobs:
           opencode serve --port 4097 --hostname 127.0.0.1 > /tmp/opencode.log 2>&1 &
           ( cd backend/bridge/opencode-bridge && \
             OPENCODE_ROOT_PATH="$GITHUB_WORKSPACE" BRIDGE_HOST=127.0.0.1 \
+            BRIDGE_TOOL_STALL_MS=240000 BRIDGE_IDLE_STALL_MS=300000 \
             node server.js > /tmp/bridge.log 2>&1 & )
 
           # Wait for the bridge's COMPOSITE health: it reports OpenCode's state
