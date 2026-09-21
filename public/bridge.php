@@ -33,7 +33,17 @@ const ALLOWED = [
     '/api/health' => 'GET',
     '/api/models' => 'GET',
     '/api/model'  => 'POST',
+    // Discipleship consolidation runs through the bridge's job API. A fresh
+    // session is opened, a job is started, and its status is polled. The task
+    // message is short and fixed-shape; each call is bounded (start returns a
+    // job id immediately, status is a quick lookup).
+    '/api/sessions'    => 'POST',
+    '/api/chat/start'  => 'POST',
 ];
+
+// Dynamic job lookups: /api/chat/status/<jobId>. The jobId is server-generated
+// as "job_" + base36, so we validate that shape rather than trusting the URL.
+const STATUS_PATTERN = '/api/chat/status/';
 
 header('Content-Type: application/json');
 // This is a status endpoint for one admin; nothing here should ever be cached.
@@ -48,13 +58,25 @@ function fail(int $status, string $message): void {
 // PATH_INFO is the part after bridge.php, e.g. /api/health. Some setups do not
 // populate it, so ?p= is accepted as a fallback.
 $path = $_SERVER['PATH_INFO'] ?? ($_GET['p'] ?? '');
-if ($path === '' || !isset(ALLOWED[$path])) {
+if ($path === '') {
     fail(404, 'Unknown bridge path.');
 }
 
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-if ($method !== ALLOWED[$path]) {
-    fail(405, 'Method not allowed for this path.');
+
+if (isset(ALLOWED[$path])) {
+    // Exact-path whitelist.
+    if ($method !== ALLOWED[$path]) {
+        fail(405, 'Method not allowed for this path.');
+    }
+} elseif (strncmp($path, STATUS_PATTERN, strlen(STATUS_PATTERN)) === 0) {
+    // Dynamic status lookup: GET /api/chat/status/<jobId>.
+    $jobId = substr($path, strlen(STATUS_PATTERN));
+    if (!preg_match('/^job_[a-z0-9]+$/', $jobId) || $method !== 'GET') {
+        fail(404, 'Unknown bridge path.');
+    }
+} else {
+    fail(404, 'Unknown bridge path.');
 }
 
 if (!function_exists('curl_init')) {

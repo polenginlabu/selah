@@ -36,6 +36,9 @@ import {
   unlinkDisciple,
   updateLifetimePhase,
 } from '../data/disciples'
+import { generateConsolidation, buildRefIndex } from '../data/consolidation'
+import { isAdminEmail } from '../data/admin'
+import { ConsolidationPanel } from '../components/ConsolidationPanel'
 
 const NODE_SIZE = 54
 const NODE_WIDTH = 88
@@ -181,6 +184,8 @@ export default function DiscipleTree() {
   const [linkTargetId, setLinkTargetId] = useState(null)
   const [moveTargetId, setMoveTargetId] = useState(null)
   const [searchOpen, setSearchOpen] = useState(false)
+  const [consolidation, setConsolidation] = useState(null)
+  const [consolidating, setConsolidating] = useState(false)
   const scrollRef = useRef(null)
 
   const loadTree = useCallback(async () => {
@@ -420,6 +425,25 @@ export default function DiscipleTree() {
     return paths
   }, [people, layout, selectedId, highlightedIds])
 
+  const refIndex = useMemo(() => buildRefIndex(Object.values(people)), [people])
+  const refName = (ref) => refIndex[ref]?.name ?? `Person ${ref}`
+
+  const handleGenerateConsolidation = async () => {
+    if (consolidating) return
+    setConsolidating(true)
+    setConsolidation(null)
+    try {
+      const report = await generateConsolidation()
+      setConsolidation(report)
+      toast.success('Consolidation report generated.')
+    } catch (err) {
+      console.error('Failed to generate consolidation:', err)
+      toast.error(err.message || 'Failed to generate the consolidation report.')
+    } finally {
+      setConsolidating(false)
+    }
+  }
+
   if (loading) return <TreeSkeleton />
 
   return (
@@ -449,6 +473,18 @@ export default function DiscipleTree() {
           >
             <TargetIcon width={16} height={16} />
           </Link>
+          {isAdminEmail(user?.email) && (
+            <button
+              onClick={handleGenerateConsolidation}
+              type="button"
+              disabled={consolidating}
+              aria-label="Generate consolidation report"
+              className="flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-full border border-line bg-surface px-3 text-xs font-semibold text-muted transition-colors hover:bg-raised disabled:opacity-50"
+            >
+              <BranchIcon width={15} height={15} />
+              {consolidating ? 'Generating…' : 'Consolidation'}
+            </button>
+          )}
         </div>
       </header>
       <div className="flex items-center gap-4 text-xs text-muted">
@@ -461,6 +497,13 @@ export default function DiscipleTree() {
           {networkCount} in network
         </span>
       </div>
+      {consolidating && (
+        <div className="flex items-center gap-2 rounded-2xl border border-line bg-surface/50 p-4 text-xs text-muted">
+          <span className="h-4 w-4 animate-spin rounded-full border-2 border-line border-t-brand" />
+          Generating consolidation report…
+        </div>
+      )}
+      {consolidation && <ConsolidationPanel report={consolidation} refName={refName} />}
       <div className="grid grid-cols-3 gap-2.5">
         {[
           { label: 'Network', value: networkCount },
