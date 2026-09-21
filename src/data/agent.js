@@ -13,9 +13,33 @@ import { buildAskTask } from '../lib/askTask.js'
 // the bridge with the server-side BRIDGE_TOKEN. The bridge token never leaves
 // the server.
 
-// The public host that runs bridge.php and, behind it, the OpenCode bridge.
-// Same origin as the deployed app, so no CORS in production.
-const BRIDGE_BASE = 'https://selah.devocean.website/bridge.php'
+// Where to reach the bridge.
+//
+// IN DEVELOPMENT the browser talks to it DIRECTLY on loopback — no PHP shim,
+// no Supabase round trip, no admin gate. One hop, and changes to server.js are
+// visible immediately.
+//
+// IN PRODUCTION that is not possible: the bridge binds 127.0.0.1 on shared
+// hosting, which exposes no arbitrary public ports, and Hostinger refuses an
+// Apache [P] proxy (503 from its own error page). bridge.php is the only door
+// the platform leaves open, so production goes through it — and that is also
+// where the admin gate lives, since a directly reachable bridge would have
+// none.
+//
+// Override with VITE_AGENT_BRIDGE_URL. NOT VITE_BRIDGE_URL — that one already
+// belongs to the study assistant (src/lib/bibleChatBridge.js) and is set to
+// loopback in .env, so reusing it pointed the PRODUCTION build at 127.0.0.1
+// and silently broke the deployed form.
+const BRIDGE_BASE =
+  import.meta.env.VITE_AGENT_BRIDGE_URL ||
+  (import.meta.env.DEV
+    ? 'http://127.0.0.1:4098'
+    : 'https://selah.devocean.website/bridge.php')
+
+// Only the PHP shim needs the caller's JWT — it uses it for the admin gate.
+// Talking to the bridge directly, there is nothing to present it to, and a
+// local bridge runs without BRIDGE_TOKEN (see backend/bridge/opencode-bridge).
+const NEEDS_JWT = !BRIDGE_BASE.startsWith('http://127.0.0.1')
 // big-pickle is outside the OpenCode workspace spending cap; every other
 // opencode/* model returns an empty reply once that cap is hit.
 const ASK_MODEL = 'opencode/big-pickle'
@@ -29,9 +53,12 @@ const POLL_INTERVAL_MS = 2000
  * @returns {Promise<string>} the agent's answer
  */
 export async function askAgent(question) {
-  const { data: { session } } = await supabase.auth.getSession()
-  const token = session?.access_token
-  if (!token) throw new Error('Sign in first.')
+  let token = null
+  if (NEEDS_JWT) {
+    const { data: { session } } = await supabase.auth.getSession()
+    token = session?.access_token
+    if (!token) throw new Error('Sign in first.')
+  }
 
   const started = await bridgeJson('/api/chat/start', token, {
     method: 'POST',
@@ -65,7 +92,7 @@ async function bridgeJson(path, token, init) {
     res = await fetch(`${BRIDGE_BASE}${path}`, {
       ...init,
       headers: {
-        Authorization: `Bearer ${token}`,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
         'Content-Type': 'application/json',
         ...(init.headers ?? {}),
       },

@@ -183,7 +183,10 @@ function require_admin(): void {
     $cached = @file_get_contents($cacheFile);
     if ($cached !== false) {
         [$at, $ok] = explode('|', $cached, 2);
-        if ((int) $at > $now - 300) {
+        // 15 minutes. Whether someone is an admin changes rarely; the route
+        // from this host to Supabase is the unreliable part, so the fewer
+        // times a request depends on it, the better.
+        if ((int) $at > $now - 900) {
             if ($ok === '1') return;
             fail(403, 'Admins only.');
         }
@@ -192,8 +195,11 @@ function require_admin(): void {
     $ch = curl_init(SUPABASE_URL . '/rest/v1/rpc/is_admin');
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => 8,
-        CURLOPT_CONNECTTIMEOUT => 5,
+        // Deliberately short. A slow Supabase must not be able to hold a
+        // request open for eight seconds — the caller gives up first and the
+        // ask looks broken when nothing is actually wrong with the agent.
+        CURLOPT_TIMEOUT        => 3,
+        CURLOPT_CONNECTTIMEOUT => 2,
         CURLOPT_POST           => true,
         CURLOPT_POSTFIELDS     => '{}',
         CURLOPT_HTTPHEADER     => [
