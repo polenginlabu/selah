@@ -176,6 +176,8 @@ async function runConsolidation(scopeRef?: string) {
 
   const jobId = encodeURIComponent(started.jobId)
   const deadline = Date.now() + CONSOLIDATION_TIMEOUT_MS
+  let lastPhase = ''
+  let lastMessage = ''
 
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 2000))
@@ -183,12 +185,24 @@ async function runConsolidation(scopeRef?: string) {
       done?: boolean
       error?: unknown
       response?: string
+      phase?: string
+      message?: string
     } | null
 
     if (!status) continue
+    if (status.phase) lastPhase = status.phase
+    if (status.message) lastMessage = status.message
     if (!status.done) continue
 
-    if (status.error) throw new BridgeError('run', `The agent failed: ${String(status.error)}`, 502)
+    if (status.error) {
+      const where = lastPhase || lastMessage
+      const detail = String(status.error)
+      throw new BridgeError(
+        'run',
+        `The agent failed${where ? ` (last: ${where})` : ''}: ${detail}`,
+        502
+      )
+    }
     const text = (status.response ?? '').trim()
     if (!text) throw new BridgeError('read', 'The agent finished but produced no output.', 502)
     return extractJson(text)
