@@ -174,8 +174,21 @@ jobs:
       #
       # The job still reports failure if either step failed — `!cancelled()`
       # changes when this runs, not whether the workflow passes.
+      # Gated on a repository variable so a nightly run does not fail for a
+      # reason no code change can fix. Gemini image generation has no free
+      # tier — an unbilled key returns `limit: 0` for every image model — so
+      # until billing is enabled on the project behind GEMINI_API_KEY this step
+      # can only ever fail, and a red cross every morning trains everyone to
+      # ignore the one that eventually matters.
+      #
+      # Turn it on with: Settings > Secrets and variables > Actions >
+      # Variables > New variable, ENABLE_BACKGROUND = true
+      #
+      # Manual dispatch ignores the gate, so the step can always be tested.
       - name: Generate today's background
-        if: ${{ !cancelled() && inputs.skip_background != true }}
+        if: >-
+          ${{ !cancelled() && inputs.skip_background != true &&
+              (vars.ENABLE_BACKGROUND == 'true' || github.event_name == 'workflow_dispatch') }}
         env:
           SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

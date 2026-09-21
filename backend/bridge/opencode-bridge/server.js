@@ -465,6 +465,26 @@ function getMessageError(messageItem) {
   return String(message);
 }
 
+/**
+ * Any provider error in the recent messages, whoever they belong to.
+ *
+ * getMessageError() only inspects the assistant message parented to OUR user
+ * message. When the provider rejects the request before that message exists —
+ * a quota refusal, a bad key — there is nothing to inspect, the poll loop sees
+ * no progress, and the job dies 120 seconds later as "stalled without
+ * progress". The real reason was sitting in the message list the whole time.
+ *
+ * Used only to enrich a failure, never to fail a healthy job.
+ */
+function findAnyRecentError(messages) {
+  if (!Array.isArray(messages)) return "";
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const error = getMessageError(messages[i]);
+    if (error) return error;
+  }
+  return "";
+}
+
 function getRunningToolName(messageItem) {
   const parts = messageItem?.parts || [];
   for (let i = parts.length - 1; i >= 0; i -= 1) {
@@ -651,7 +671,19 @@ async function executeChatJob(job, message, model) {
       throw new Error(`OpenCode stalled while running tool: ${runningTool}`);
     }
     if (!runningTool && stalledForMs > 120000) {
-      throw new Error("OpenCode stalled without progress");
+      // Say WHY where we can. A provider that refused the request leaves its
+      // reason on a message we were not looking at; reporting "stalled" alone
+      // sends people hunting for a hang that never happened.
+      const hidden = findAnyRecentError(latestMessages);
+      if (hidden) {
+        throw new Error(`OpenCode provider error: ${hidden}`);
+      }
+      throw new Error(
+        "OpenCode stalled without progress" +
+          (trackedUserMessageId
+            ? " (the prompt was accepted but the model never replied)"
+            : " (OpenCode never registered the prompt — check the model id and that the provider is authenticated)")
+      );
     }
 
     if (!runningTool && completedTools.length > 0 && stalledForMs > 15000) {
