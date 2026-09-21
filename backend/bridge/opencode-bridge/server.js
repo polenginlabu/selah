@@ -50,6 +50,27 @@ const BRIDGE_HOST = process.env.BRIDGE_HOST || "127.0.0.1";
 // by a secret). Set it anywhere the bridge is reachable from the internet.
 const BRIDGE_TOKEN = process.env.BRIDGE_TOKEN || "";
 
+// Password for OpenCode itself, which is a SEPARATE problem from BRIDGE_TOKEN.
+//
+// BRIDGE_TOKEN guards the front door. This guards the back one: OpenCode
+// listens on 127.0.0.1:4097 and, unprotected, will drive an agent with
+// filesystem access for anyone who can open that socket. On a VPS that is only
+// this machine's users; on SHARED hosting, tenants commonly share the host's
+// network namespace, so "localhost" is not private to your account and a
+// neighbour could bypass the bridge entirely and read ~/.local/share/opencode/
+// auth.json — which holds live provider API keys.
+//
+// OpenCode expects HTTP Basic (any username, this value as the password), so
+// every call out of this bridge carries it when the variable is set. Leave it
+// unset for a laptop, where loopback really is private.
+const OPENCODE_PASSWORD = process.env.OPENCODE_SERVER_PASSWORD || "";
+
+function opencodeAuthHeader() {
+  if (!OPENCODE_PASSWORD) return {};
+  const encoded = Buffer.from(`opencode:${OPENCODE_PASSWORD}`).toString("base64");
+  return { Authorization: `Basic ${encoded}` };
+}
+
 // ─── In-memory session & model store ─────────────────────────────────────────
 // Stores multiple sessions so the user can switch between chats.
 // Each session tracks its OpenCode session ID and local metadata.
@@ -185,6 +206,7 @@ async function opencodeFetch(path, options = {}) {
     ...options,
     headers: {
       "Content-Type": "application/json",
+      ...opencodeAuthHeader(),
       ...(options.headers || {}),
     },
   });
@@ -1177,7 +1199,7 @@ app.post("/api/chat/stream", async (req, res) => {
     const eventController = new AbortController();
 
     const eventRes = await fetch(`${OPENCODE_BASE_URL}/event`, {
-      headers: { Accept: "text/event-stream" },
+      headers: { Accept: "text/event-stream", ...opencodeAuthHeader() },
       signal: eventController.signal,
     });
 
@@ -1189,7 +1211,7 @@ app.post("/api/chat/stream", async (req, res) => {
       `${OPENCODE_BASE_URL}/session/${opencodeSessionId}/prompt_async`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...opencodeAuthHeader() },
         body: JSON.stringify(payload),
       }
     );
@@ -1540,8 +1562,13 @@ app.listen(BRIDGE_PORT, BRIDGE_HOST, () => {
 
   console.log(
     BRIDGE_TOKEN
-      ? "  Auth: BRIDGE_TOKEN is set — /api requires a bearer token.\n"
-      : "  Auth: BRIDGE_TOKEN is NOT set — /api is open to anyone who can reach it.\n"
+      ? "  Auth: BRIDGE_TOKEN is set — /api requires a bearer token."
+      : "  Auth: BRIDGE_TOKEN is NOT set — /api is open to anyone who can reach it."
+  );
+  console.log(
+    OPENCODE_PASSWORD
+      ? "  OpenCode: password set — calls carry HTTP Basic.\n"
+      : "  OpenCode: NO password. On shared hosting a neighbour may reach port 4097.\n"
   );
 
   if (BRIDGE_HOST === "0.0.0.0" && !BRIDGE_TOKEN) {

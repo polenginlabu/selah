@@ -61,7 +61,15 @@ if (!function_exists('curl_init')) {
     fail(500, 'PHP cURL is not available on this host.');
 }
 
-$headers = ['Accept: application/json'];
+// Tell the bridge this request came from outside the machine. Without it the
+// bridge sees a plain loopback call and its "refuse proxied requests when no
+// token is configured" fail-safe never fires — which would leave these three
+// endpoints open to the world if BRIDGE_TOKEN were ever lost.
+$headers = [
+    'Accept: application/json',
+    'X-Forwarded-For: ' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'),
+    'X-Forwarded-Proto: https',
+];
 
 // Pass the bearer token through untouched. getallheaders() is absent on some
 // SAPIs, so fall back to the CGI variable.

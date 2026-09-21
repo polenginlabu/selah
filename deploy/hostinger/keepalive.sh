@@ -30,9 +30,17 @@ LOG="$HOME/keepalive.log"
 # Cron runs with a near-empty PATH, so neither node nor opencode would be found.
 export PATH="$HOME/.node/bin:$HOME/.opencode/bin:/usr/local/bin:/usr/bin:/bin"
 
-# BRIDGE_TOKEN lives here rather than in the repo, so it is never committed.
-# chmod 600.
+# BRIDGE_TOKEN and OPENCODE_SERVER_PASSWORD live here rather than in the repo,
+# so they are never committed. chmod 600.
+#
+# `set -a` matters: sourcing alone makes them shell variables, NOT environment
+# variables, so the processes started below would not inherit them. The bridge
+# would come back up with no token — and because bridge.php reaches it over
+# loopback, the proxy fail-safe would not catch that either. The result would
+# be a publicly reachable bridge with its authentication silently switched off.
+set -a
 [ -f "$ENV_FILE" ] && . "$ENV_FILE"
+set +a
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
 
@@ -66,6 +74,9 @@ if responds http://127.0.0.1:4097/global/health; then
   :
 else
   log "opencode is not answering — starting it"
+  if [ -z "${OPENCODE_SERVER_PASSWORD:-}" ]; then
+    log "WARNING: OPENCODE_SERVER_PASSWORD is not set — port 4097 is unauthenticated"
+  fi
   nohup opencode serve --port 4097 --hostname 127.0.0.1 >> "$HOME/opencode.log" 2>&1 &
   # The bridge reports OpenCode's health too, so give it a moment to bind
   # before the bridge is judged.
