@@ -36,9 +36,6 @@ import {
   unlinkDisciple,
   updateLifetimePhase,
 } from '../data/disciples'
-import { generateConsolidation, buildRefIndex } from '../data/consolidation'
-import { isAdminEmail } from '../data/admin'
-import { ConsolidationPanel } from '../components/ConsolidationPanel'
 
 const NODE_SIZE = 54
 const NODE_WIDTH = 88
@@ -184,12 +181,6 @@ export default function DiscipleTree() {
   const [linkTargetId, setLinkTargetId] = useState(null)
   const [moveTargetId, setMoveTargetId] = useState(null)
   const [searchOpen, setSearchOpen] = useState(false)
-  const [consolidation, setConsolidation] = useState(null)
-  const [consolidating, setConsolidating] = useState(false)
-  // The run happens in a GitHub Actions runner, which spends its first minute
-  // or two installing OpenCode. A spinner alone for that long is
-  // indistinguishable from something hung, so report elapsed time and phase.
-  const [consolidationProgress, setConsolidationProgress] = useState(null)
   const scrollRef = useRef(null)
 
   const loadTree = useCallback(async () => {
@@ -429,27 +420,7 @@ export default function DiscipleTree() {
     return paths
   }, [people, layout, selectedId, highlightedIds])
 
-  const refIndex = useMemo(() => buildRefIndex(Object.values(people)), [people])
-  const refName = (ref) => refIndex[ref]?.name ?? `Person ${ref}`
 
-  const handleGenerateConsolidation = async () => {
-    if (consolidating) return
-    setConsolidating(true)
-    setConsolidation(null)
-    try {
-      const report = await generateConsolidation({
-        onProgress: (seconds, status) => setConsolidationProgress({ seconds, status }),
-      })
-      setConsolidation(report)
-      toast.success('Consolidation report generated.')
-    } catch (err) {
-      console.error('Failed to generate consolidation:', err)
-      toast.error(err.message || 'Failed to generate the consolidation report.')
-    } finally {
-      setConsolidating(false)
-      setConsolidationProgress(null)
-    }
-  }
 
   if (loading) return <TreeSkeleton />
 
@@ -480,18 +451,6 @@ export default function DiscipleTree() {
           >
             <TargetIcon width={16} height={16} />
           </Link>
-          {isAdminEmail(user?.email) && (
-            <button
-              onClick={handleGenerateConsolidation}
-              type="button"
-              disabled={consolidating}
-              aria-label="Generate consolidation report"
-              className="flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-full border border-line bg-surface px-3 text-xs font-semibold text-muted transition-colors hover:bg-raised disabled:opacity-50"
-            >
-              <BranchIcon width={15} height={15} />
-              {consolidating ? 'Generating…' : 'Consolidation'}
-            </button>
-          )}
         </div>
       </header>
       <div className="flex items-center gap-4 text-xs text-muted">
@@ -504,23 +463,6 @@ export default function DiscipleTree() {
           {networkCount} in network
         </span>
       </div>
-      {consolidating && (
-        <div className="flex items-start gap-2.5 rounded-2xl border border-line bg-surface/50 p-4 text-xs text-muted">
-          <span className="mt-0.5 h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-line border-t-brand" />
-          <div>
-            <p className="font-medium text-ink">
-              {consolidationProgress?.status === 'running' ? 'The agent is working' : 'Starting the runner'}
-              {consolidationProgress?.seconds > 0 && (
-                <span className="font-normal tabular-nums text-muted"> · {consolidationProgress.seconds}s</span>
-              )}
-            </p>
-            <p className="mt-1 leading-relaxed">
-              This runs on GitHub and takes a few minutes. You can leave this page — the report is saved.
-            </p>
-          </div>
-        </div>
-      )}
-      {consolidation && <ConsolidationPanel report={consolidation} refName={refName} />}
       <div className="grid grid-cols-3 gap-2.5">
         {[
           { label: 'Network', value: networkCount },

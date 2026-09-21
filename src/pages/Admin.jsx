@@ -15,7 +15,7 @@ import {
   XIcon,
   CheckIcon,
 } from '../icons'
-import { AgentJobPanel } from '../components/AgentJobPanel'
+import { AskAgentPanel } from '../components/AskAgentPanel'
 import { getBridgeHealth, listBridgeModels, setBridgeModel } from '../data/bridge'
 import { formatDateShort, todayISO } from '../lib/date'
 import {
@@ -738,7 +738,7 @@ export default function Admin() {
         <StatCard icon={UsersIcon} value={totalDisciples} label="Disciples" />
       </div>
 
-      <AgentJobPanel />
+      <AskAgentPanel />
 
       <BridgePanel />
 

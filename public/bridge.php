@@ -33,13 +33,22 @@ const ALLOWED = [
     '/api/health' => 'GET',
     '/api/models' => 'GET',
     '/api/model'  => 'POST',
-    // Discipleship consolidation runs through the bridge's job API. A fresh
-    // session is opened, a job is started, and its status is polled. The task
-    // message is short and fixed-shape; each call is bounded (start returns a
-    // job id immediately, status is a quick lookup).
+    // Asking the agent runs through the bridge's job API: open a session,
+    // start a job, poll its status.
     '/api/sessions'    => 'POST',
     '/api/chat/start'  => 'POST',
 ];
+
+// Every prompt this proxy will forward must begin with this.
+//
+// WHY: /api/chat/start hands a message to an agent that has a checkout and
+// real tools. Forwarding the body verbatim would make this endpoint a remote
+// shell for anyone holding the bridge token — the token is the only thing in
+// front of it, and a token can leak. Requiring the framing that
+// supabase/functions/_shared/agentTask.js produces means the worst an attacker
+// can do with a stolen token is ask a question, which is what the endpoint is
+// for. Keep this string in step with buildAskTask().
+const REQUIRED_PROMPT_PREFIX = 'You are the SELAH assistant, answering a question from a church leader.';
 
 // Dynamic job lookups: /api/chat/status/<jobId>. The jobId is server-generated
 // as "job_" + base36, so we validate that shape rather than trusting the URL.
@@ -118,8 +127,17 @@ curl_setopt_array($ch, [
 
 if ($method === 'POST') {
     $body = file_get_contents('php://input') ?: '';
-    if (strlen($body) > 4096) {
+    if (strlen($body) > 8192) {
         fail(413, 'Request body too large.');
+    }
+
+    // A prompt must carry the expected framing — see REQUIRED_PROMPT_PREFIX.
+    if ($path === '/api/chat/start') {
+        $decoded = json_decode($body, true);
+        $message = is_array($decoded) && isset($decoded['message']) ? (string) $decoded['message'] : '';
+        if (strpos($message, REQUIRED_PROMPT_PREFIX) !== 0) {
+            fail(403, 'This prompt is not one this proxy will forward.');
+        }
     }
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, $body);

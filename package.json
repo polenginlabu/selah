@@ -22,8 +22,7 @@
     "check:cache": "node scripts/check-deploy-cache.js",
     "bridge": "OPENCODE_ROOT_PATH=\"$PWD\" npm start --prefix backend/bridge/opencode-bridge",
     "bridge:install": "npm ci --prefix backend/bridge/opencode-bridge",
-    "agent:test": "node --test scripts/selah/consolidation.test.js",
-    "agent:ask": "node scripts/run-agent-job.js --ask"
+    "agent:test": "node --test scripts/selah/agentTask.test.js"
   },
   "dependencies": {
     "@lottiefiles/dotlottie-react": "^0.19.16",

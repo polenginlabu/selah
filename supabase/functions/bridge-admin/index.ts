@@ -1,5 +1,5 @@
 // Lets an admin check the OpenCode bridge from inside SELAH, and ask it to run
-// a discipleship consolidation report.
+// or ask it a question.
 //
 // WHY THIS EXISTS RATHER THAN CALLING THE BRIDGE FROM THE BROWSER
 //
@@ -22,6 +22,7 @@
 //   supabase secrets set BRIDGE_URL=https://your-host/bridge
 //   supabase secrets set BRIDGE_TOKEN=the-same-value-as-on-the-bridge
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { buildAskTask, AgentTaskError, MAX_QUESTION_LENGTH } from '../_shared/agentTask.js'
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? ''
 const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') ?? ''
@@ -61,10 +62,15 @@ type ActionName = keyof typeof ACTIONS
 // status check should never hold the page for long.
 const TIMEOUT_MS = 12_000
 
-// A consolidation run drives a full agent session, which can take a few minutes.
+// An ask drives a full agent session, which takes tens of seconds.
 // This must stay under the Edge Function's own execution timeout — raise that in
 // supabase/config.toml (see docs/discipleship/README.md). Tune with an env var.
-const CONSOLIDATION_TIMEOUT_MS = Number(Deno.env.get('CONSOLIDATION_TIMEOUT_MS') ?? 240_000)
+// Kept under the Supabase Edge Function wall-clock limit (150s on free), so
+// a slow answer fails with our message rather than a bare gateway error.
+const ASK_TIMEOUT_MS = Number(Deno.env.get('ASK_TIMEOUT_MS') ?? 120_000)
+// big-pickle is outside the OpenCode workspace spending cap; every other
+// opencode/* model returns an empty reply once that cap is hit.
+const ASK_MODEL = Deno.env.get('ASK_MODEL') ?? 'opencode/big-pickle'
 
 // ---------------------------------------------------------------------------
 // Bridge HTTP helper
@@ -109,7 +115,7 @@ async function bridgeFetch(path: string, init: RequestInit, timeoutMs = TIMEOUT_
 }
 
 // ---------------------------------------------------------------------------
-// Consolidation orchestration
+// Ask orchestration
 // ---------------------------------------------------------------------------
 
 // The task handed to the server-side OpenCode agent. The agent runs inside the
@@ -118,66 +124,39 @@ async function bridgeFetch(path: string, init: RequestInit, timeoutMs = TIMEOUT_
 // selah_analyst role (see 20260915b_discipleship_signals.sql). The whole point
 // of that role is the agent can ONLY read the de-identified discipleship_signals
 // view — never names, contacts, or pastoral notes.
-function buildTask(scopeRef?: string): string {
-  const scope = scopeRef
-    ? `Focus on the person with ref "${scopeRef}" and lead with their specific situation, then give the one-paragraph tree summary.`
-    : 'Cover the whole tree.'
-  return [
-    'You are running the SELAH consolidation report.',
-    '',
-    '1. Read docs/discipleship/agent-prompt.md and follow its system prompt exactly.',
-    '2. Read docs/discipleship/knowledge-base.md — it is the only source of church procedure. Do not invent church guidance.',
-    '3. Connect to PostgreSQL as the selah_analyst role using the connection string in your environment (the DATABASE_URL / pooler connection for that role) and query the view public.discipleship_signals.',
-    `4. ${scope}`,
-    '5. Produce the consolidation JSON exactly per the schema in agent-prompt.md: a tree summary + flags, and per-person entries keyed by opaque ref.',
-    '',
-    'Return ONLY the JSON. No prose before or after it.',
-  ].join('\n')
-}
-
-// Pulls the first balanced JSON object out of a string, tolerating an agent
-// that wrapped the JSON in prose or backticks.
-function extractJson(text: string): unknown {
-  const cleaned = text
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/, '')
-    .trim()
-  try {
-    return JSON.parse(cleaned)
-  } catch {
-    // fall back to the first { ... } substring
-    const start = cleaned.indexOf('{')
-    const end = cleaned.lastIndexOf('}')
-    if (start === -1 || end <= start) {
-      throw new BridgeError('parse', 'The agent did not return JSON.', 502)
-    }
-    return JSON.parse(cleaned.slice(start, end + 1))
-  }
-}
-
-async function runConsolidation(scopeRef?: string) {
-  // The bridge keys off one global active session, so start a fresh one to keep
-  // the report from inheriting an unrelated conversation (same as runAgent).
+/**
+ * Sends one question to the agent and waits for the answer.
+ *
+ * The bridge's job API is start-then-poll rather than request-response,
+ * because a model takes far longer than an HTTP request should. This function
+ * hides that: it starts a job, polls until it finishes, and returns the text.
+ *
+ * Synchronous from the caller's point of view, which is only viable because a
+ * question is short work. It is NOT viable for anything that takes minutes —
+ * a Supabase Edge Function has its own wall-clock limit (150s on the free
+ * plan), so ASK_TIMEOUT_MS is deliberately set below it. A job that needs
+ * longer needs a queue, not a bigger number here.
+ */
+async function runAsk(question: string): Promise<string> {
+  // The bridge keys off one global active session, so start a fresh one or the
+  // answer inherits an unrelated conversation.
   await bridgeFetch('/api/sessions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title: `selah-consolidation-${Date.now()}` }),
+    body: JSON.stringify({ title: `selah-ask-${Date.now()}` }),
   }, 20_000).catch(() => {})
 
-  // big-pickle is the only model outside the OpenCode spending cap that returns
-  // a reply (see scripts/selah/bridge.js). Start a job, then poll it.
   const started = (await bridgeFetch('/api/chat/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message: buildTask(scopeRef), model: 'opencode/big-pickle' }),
+    body: JSON.stringify({ message: buildAskTask(question), model: ASK_MODEL }),
   }, 20_000)) as { jobId?: string } | null
 
-  if (!started?.jobId) throw new BridgeError('start', 'The bridge accepted the prompt but returned no job id.', 502)
+  if (!started?.jobId) throw new BridgeError('start', 'The bridge accepted the question but returned no job id.', 502)
 
   const jobId = encodeURIComponent(started.jobId)
-  const deadline = Date.now() + CONSOLIDATION_TIMEOUT_MS
+  const deadline = Date.now() + ASK_TIMEOUT_MS
   let lastPhase = ''
-  let lastMessage = ''
 
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 2000))
@@ -186,29 +165,21 @@ async function runConsolidation(scopeRef?: string) {
       error?: unknown
       response?: string
       phase?: string
-      message?: string
     } | null
 
     if (!status) continue
     if (status.phase) lastPhase = status.phase
-    if (status.message) lastMessage = status.message
     if (!status.done) continue
 
     if (status.error) {
-      const where = lastPhase || lastMessage
-      const detail = String(status.error)
-      throw new BridgeError(
-        'run',
-        `The agent failed${where ? ` (last: ${where})` : ''}: ${detail}`,
-        502
-      )
+      throw new BridgeError('run', `The agent failed${lastPhase ? ` (last: ${lastPhase})` : ''}: ${String(status.error)}`, 502)
     }
     const text = (status.response ?? '').trim()
-    if (!text) throw new BridgeError('read', 'The agent finished but produced no output.', 502)
-    return extractJson(text)
+    if (!text) throw new BridgeError('read', 'The agent finished but produced no answer.', 502)
+    return text
   }
 
-  throw new BridgeError('run', 'The consolidation agent did not finish in time.', 504)
+  throw new BridgeError('run', 'The agent did not answer in time.', 504)
 }
 
 // ---------------------------------------------------------------------------
@@ -253,27 +224,32 @@ Deno.serve(async (req) => {
 
   const action = String(body.action ?? '')
 
-  // --- Consolidation (multi-step; handled separately from the simple whitelist)
-  if (action === 'consolidation') {
-    let scopeRef: string | undefined
-    const rawRef = body.ref
-    if (typeof rawRef === 'string' && rawRef.trim()) {
-      // ref is the first 8 chars of a disciple id — short, opaque, stable.
-      if (!/^[0-9a-f]{1,8}$/i.test(rawRef.trim())) {
-        return json({ error: 'A person ref must be 1-8 hex characters.' }, 400)
-      }
-      scopeRef = rawRef.trim().toLowerCase()
+  // --- Ask (multi-step; handled separately from the simple whitelist) --------
+  //
+  // Not in ACTIONS because that table maps one action to one bridge path, and
+  // this is three calls: open a session, start a job, poll it.
+  if (action === 'ask') {
+    const question = typeof body.prompt === 'string' ? body.prompt.trim() : ''
+    if (!question) return json({ error: 'Type a question first.' }, 400)
+    if (question.length > MAX_QUESTION_LENGTH) {
+      return json({ error: `That question is too long (max ${MAX_QUESTION_LENGTH} characters).` }, 400)
     }
     try {
-      const report = await runConsolidation(scopeRef)
-      return json({ ok: true, report }, 200)
+      const answer = await runAsk(question)
+      return json({ ok: true, answer }, 200)
     } catch (err) {
+      // Returned as 200 with ok:false so the UI can show WHICH step failed —
+      // "the bridge is down" and "the model produced nothing" need different
+      // responses from whoever is reading it.
       if (err instanceof BridgeError) {
-        console.error(`bridge-admin: consolidation failed at ${err.step}:`, err.message)
-        return json({ ok: false, step: err.step, error: err.message, status: err.status ?? 502 }, 200)
+        console.error(`bridge-admin: ask failed at ${err.step}:`, err.message)
+        return json({ ok: false, step: err.step, error: err.message }, 200)
       }
-      console.error('bridge-admin: consolidation failed', err)
-      return json({ ok: false, error: 'The consolidation run failed unexpectedly.', status: 500 }, 200)
+      if (err instanceof AgentTaskError) {
+        return json({ ok: false, step: 'task', error: err.message }, 200)
+      }
+      console.error('bridge-admin: ask failed', err)
+      return json({ ok: false, error: 'The run failed unexpectedly.' }, 200)
     }
   }
 
