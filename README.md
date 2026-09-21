@@ -533,35 +533,37 @@ npm run bridge
 The bridge prints which auth mode it is in on startup. Keep
 `BRIDGE_HOST=127.0.0.1` — the reverse proxy below is the only way in.
 
-**2. Expose it through the web server, not directly.** The bridge should stay on
-loopback and be reached over HTTPS through a path:
+**2. Expose it through `bridge.php`, not directly.** The bridge stays bound to
+127.0.0.1; `public/bridge.php` is the only way in. It ships with the normal
+deploy, so there is nothing to place by hand.
 
-```apache
-# Requires mod_proxy. Put it ABOVE the SPA rewrite so /bridge/ is not
-# swallowed by the index.html fallback.
-RewriteEngine On
-RewriteRule ^bridge/(.*)$ http://127.0.0.1:4098/$1 [P,L]
+An Apache `[P]` proxy rule would be tidier, but this plan refuses it — the rule
+matches, the proxy is attempted, and Hostinger answers **503** from its own
+error page (`platform: hostinger`, and no `x-hcdn-upstream-rt`). PHP runs on the
+web tier and can open a loopback socket, so it does the job in ten lines.
+
+`bridge.php` forwards only three exact paths, hard-codes the origin, and passes
+the caller's bearer token through for the bridge to check — so an anonymous
+caller gets a 401 and nothing else. Without that whitelist it would be an SSRF
+into anything else listening on the box.
+
+Verify once deployed:
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' https://your-domain/bridge.php/api/health
 ```
 
-> **Check this works before relying on it.** `ProxyPass` is not permitted in
-> `.htaccess` at all, and the `[P]` rewrite flag needs `mod_proxy`, which shared
-> hosting plans frequently disable. Verify from your own machine:
->
-> ```bash
-> curl -sS -o /dev/null -w '%{http_code}\n' https://your-domain/bridge/api/health
-> ```
->
-> `401` means the proxy works and the token is being enforced — that is the
-> result you want. `404` or HTML means the proxy is not active, and the panel
-> cannot reach the bridge. If your plan does not allow proxying, the bridge
-> cannot be reached from Supabase at all, and the honest alternative is a
-> heartbeat: a cron on the box writes its status to a Supabase table and the
-> panel reads that row instead.
+| Code | Meaning |
+| --- | --- |
+| **401** | Working — reached the bridge, correctly refused without a token |
+| **502** | `bridge.php` is live but the bridge is not running |
+| **404** | The SPA fallback swallowed it, or PATH_INFO is unsupported — try `?p=/api/health` |
+| **500** | PHP cURL missing on the host |
 
 **3. Give the Edge Function the secrets and deploy it:**
 
 ```bash
-supabase secrets set BRIDGE_URL=https://your-domain/bridge
+supabase secrets set BRIDGE_URL=https://your-domain/bridge.php
 supabase secrets set BRIDGE_TOKEN=the-same-value-as-step-1
 supabase functions deploy bridge-admin
 ```
@@ -571,7 +573,7 @@ supabase functions deploy bridge-admin
 | Panel says | Means |
 | --- | --- |
 | Unreachable | `BRIDGE_URL` is wrong, the proxy is not active, or the box is down |
-| Returned a web page rather than JSON | The proxy path is being caught by the SPA fallback — move the rule above it |
+| Returned a web page rather than JSON | The SPA fallback caught it — check the `bridge.php` exemption in .htaccess |
 | Rejected the token | `BRIDGE_TOKEN` in Supabase does not match the bridge's |
 | Bridge up, OpenCode down | `opencode serve` is not running, or died. Restart it |
 | Admins only | The signed-in account is not an admin according to `is_admin()` |

@@ -5,23 +5,21 @@
   RewriteEngine On
   RewriteBase /
 
-  # /bridge/* -> the OpenCode bridge on loopback, for the admin console's
-  # status panel. This MUST come before the SPA fallback below, which would
-  # otherwise answer /bridge/api/health with index.html and a 200.
+  # bridge.php reaches the OpenCode bridge on loopback for the admin status
+  # panel. It must be exempted from the SPA fallback below, which would
+  # otherwise rewrite /bridge.php/api/health to index.html — REQUEST_FILENAME
+  # for a path WITH PATH_INFO is not a real file, so the !-f condition matches.
   #
-  # The bridge stays bound to 127.0.0.1; this is the only way in, it is HTTPS
-  # the whole way from the browser, and the bridge refuses any proxied request
-  # unless BRIDGE_TOKEN is set (see backend/bridge/opencode-bridge/server.js).
-  # Requests carry that token from the bridge-admin Edge Function, never from
-  # the browser.
-  #
-  # [P] needs mod_proxy. Shared hosting often disables it, in which case this
-  # block does nothing and /bridge/ keeps returning the SPA — test with:
-  #   curl -sS -o /dev/null -w '%{http_code}\n' https://your-domain/bridge/api/health
-  # 401 = working. 200 with HTML = mod_proxy is unavailable.
-  <IfModule mod_proxy.c>
-    RewriteRule ^bridge/(.*)$ http://127.0.0.1:4098/$1 [P,L]
-  </IfModule>
+  # An Apache `[P]` proxy rule would be the tidier route, but this plan refuses
+  # it: the rule matches, the proxy is attempted, and Hostinger answers 503
+  # from its own error page. PHP can open the loopback socket, so it does the
+  # job instead. See public/bridge.php for what keeps that safe.
+  RewriteRule ^bridge\.php(/.*)?$ - [L]
+
+  # Apache commonly drops the Authorization header before PHP sees it, which
+  # would strip the bearer token and turn every call into a confusing 401.
+  RewriteCond %{HTTP:Authorization} .
+  RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
 
   RewriteRule ^index\.html$ - [L]
   RewriteCond %{REQUEST_FILENAME} !-f
