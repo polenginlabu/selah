@@ -1,51 +1,101 @@
 import { supabase } from '../lib/supabase'
+import { buildAskTask } from '../lib/askTask.js'
 
 // Ask the OpenCode agent a question.
 //
-// The browser never talks to the bridge. It calls bridge-admin, which verifies
-// the caller is an admin in the database and holds the bridge token
-// server-side — see supabase/functions/bridge-admin/index.ts for why the
-// direct route is not an option.
+// The browser talks DIRECTLY to bridge.php on the same server as the bridge —
+// not through a Supabase Edge Function. The Edge Function route worked but was
+// slow and flaky: it lived in a different region, and the path back to this
+// host intermittently hung. Direct is one hop and reliable.
 //
-// Synchronous: the Edge Function starts a job on the bridge and polls it until
-// it answers. That only works because a question is short work — tens of
-// seconds, comfortably inside the function's own wall-clock limit.
+// Security is preserved: the caller sends its own Supabase JWT, bridge.php
+// verifies it is a real admin (is_admin in the database) and then forwards to
+// the bridge with the server-side BRIDGE_TOKEN. The bridge token never leaves
+// the server.
+
+// The public host that runs bridge.php and, behind it, the OpenCode bridge.
+// Same origin as the deployed app, so no CORS in production.
+const BRIDGE_BASE = 'https://selah.devocean.website/bridge.php'
+// big-pickle is outside the OpenCode workspace spending cap; every other
+// opencode/* model returns an empty reply once that cap is hit.
+const ASK_MODEL = 'opencode/big-pickle'
+// A question can take a couple of minutes; keep it comfortably under the
+// AskAgentPanel copy ("up to two minutes").
+const ASK_TIMEOUT_MS = 120_000
+const POLL_INTERVAL_MS = 2000
 
 /**
  * @param {string} question
  * @returns {Promise<string>} the agent's answer
  */
 export async function askAgent(question) {
-  const { data, error } = await supabase.functions.invoke('bridge-admin', {
-    body: { action: 'ask', prompt: question },
-  })
-  if (error) throw new Error((await readFunctionError(error)) || 'Could not reach the agent.')
+  const { data: { session } } = await supabase.auth.getSession()
+  const token = session?.access_token
+  if (!token) throw new Error('Sign in first.')
 
-  // The function answers 200 with ok:false for a failure it understands, so
-  // the step is preserved — "the bridge is down" and "the model said nothing"
-  // want different responses from whoever is reading it.
-  if (!data?.ok) {
-    const step = data?.step ? ` (${data.step})` : ''
-    throw new Error(`${data?.error || 'The agent could not answer.'}${step}`)
+  const started = await bridgeJson('/api/chat/start', token, {
+    method: 'POST',
+    body: JSON.stringify({ message: buildAskTask(question), model: ASK_MODEL }),
+  })
+  if (!started?.jobId) {
+    throw new Error(started?.error || 'The bridge accepted the question but returned no job id.')
   }
-  return data.answer
+  const jobId = encodeURIComponent(started.jobId)
+
+  const deadline = Date.now() + ASK_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    await sleep(POLL_INTERVAL_MS)
+    const status = await bridgeJson(`/api/chat/status/${jobId}`, token, { method: 'GET' })
+    if (!status?.done) continue
+    if (status.error) throw new Error(`The agent failed: ${status.error}`)
+    const text = (status.response ?? '').trim()
+    if (!text) throw new Error('The agent finished but produced no answer.')
+    return text
+  }
+  throw new Error('The agent did not answer in time.')
 }
 
-async function readFunctionError(error) {
-  const response = error?.context
-  if (!(response instanceof Response)) {
-    return 'Could not reach the bridge-admin function. If this is the first run, deploy it: supabase functions deploy bridge-admin'
+/**
+ * Calls a bridge.php endpoint with the caller's Supabase JWT.
+ * Throws with a useful message for every non-2xx / non-JSON response.
+ */
+async function bridgeJson(path, token, init) {
+  let res
+  try {
+    res = await fetch(`${BRIDGE_BASE}${path}`, {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        ...(init.headers ?? {}),
+      },
+    })
+  } catch (err) {
+    throw new Error(`Could not reach the bridge at ${BRIDGE_BASE}: ${err?.message ?? err}`)
   }
+
   let raw = ''
   try {
-    raw = await response.clone().text()
+    raw = await res.text()
   } catch {
-    return `HTTP ${response.status}`
+    raw = ''
   }
+
+  let body = null
   try {
-    const body = JSON.parse(raw)
-    if (typeof body?.error === 'string') return body.error
-  } catch { /* not JSON */ }
-  const snippet = raw.slice(0, 300).replace(/\s+/g, ' ').trim()
-  return snippet ? `HTTP ${response.status}: ${snippet}` : `HTTP ${response.status}`
+    body = raw ? JSON.parse(raw) : null
+  } catch {
+    // not JSON
+  }
+
+  if (!res.ok) {
+    const message = body?.error || raw.slice(0, 200) || `HTTP ${res.status}`
+    throw new Error(`${message} (${res.status})`)
+  }
+  if (typeof body !== 'object' || body === null) {
+    throw new Error('The bridge returned an unreadable answer.')
+  }
+  return body
 }
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
