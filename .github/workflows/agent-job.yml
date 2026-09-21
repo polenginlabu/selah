@@ -1,0 +1,150 @@
+name: Agent job
+
+# Runs ONE queued agent_jobs row — a free-form question, or the discipleship
+# consolidation report — and writes the answer back to the row.
+#
+# WHY A RUNNER RATHER THAN A SERVER
+#
+# This used to run on the Hostinger box behind a long-lived bridge. It could
+# not be made to hold: the shared plan's process limiter killed OpenCode every
+# time it did real work, with no catchable signal, so ~/opencode.log filled
+# with "listening" lines and no errors. A runner has the memory, installs the
+# stack fresh, and is discarded — nothing to supervise, nothing to keep alive,
+# and no agent port exposed to the internet.
+#
+# Dispatched by the trigger-agent Edge Function, which is admin-gated.
+#
+# Required repository secrets (same as the devotion job, plus one):
+#   OPENCODE_AUTH_JSON          ~/.local/share/opencode/auth.json contents
+#   SUPABASE_SERVICE_ROLE_KEY   writes the result back; bypasses RLS
+#   VITE_SUPABASE_URL           reused from the deploy workflow
+#   SELAH_ANALYST_DATABASE_URL  pooler connection string for the selah_analyst
+#                               role. Consolidation only. That role can SELECT
+#                               exactly one de-identified view, so this cannot
+#                               read names, emails or pastoral notes even if
+#                               the agent is confused or prompt-injected.
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: 'agent_jobs row to run (uuid)'
+        required: true
+        type: string
+      model:
+        description: 'Override the model, e.g. opencode/big-pickle'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# Keyed by job id: two dispatches of the SAME job must not both run it, but
+# two different jobs are free to run at once.
+concurrency:
+  group: agent-job-${{ inputs.job_id }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    # A question answers in 1-2 minutes; consolidation reads two documents and
+    # queries Postgres. This is a backstop against a wedged agent, not a target.
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm ci --prefix backend/bridge/opencode-bridge
+
+      # ~150 MB binary. Caching keeps the nightly run quick and removes a
+      # download that would otherwise be a nightly chance to fail.
+      - name: Cache OpenCode
+        id: cache-opencode
+        uses: actions/cache@v4
+        with:
+          path: ~/.opencode
+          key: opencode-${{ runner.os }}-v1
+
+      - name: Install OpenCode
+        if: steps.cache-opencode.outputs.cache-hit != 'true'
+        run: curl -fsSL https://opencode.ai/install | bash
+
+      - name: Put OpenCode on PATH
+        run: echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+
+      # Credentials are found via $HOME. Without this the agent starts fine and
+      # every model returns an EMPTY reply rather than an auth error, which is
+      # the single most confusing failure in this stack.
+      - name: Restore OpenCode credentials
+        env:
+          OPENCODE_AUTH_JSON: ${{ secrets.OPENCODE_AUTH_JSON }}
+        run: |
+          if [ -z "$OPENCODE_AUTH_JSON" ]; then
+            echo "::error::OPENCODE_AUTH_JSON secret is not set. Copy ~/.local/share/opencode/auth.json from a logged-in machine."
+            exit 1
+          fi
+          mkdir -p ~/.local/share/opencode
+          printf '%s' "$OPENCODE_AUTH_JSON" > ~/.local/share/opencode/auth.json
+          chmod 600 ~/.local/share/opencode/auth.json
+          opencode auth list
+
+      - name: Start OpenCode and the bridge
+        run: |
+          set -eu
+          opencode serve --port 4097 --hostname 127.0.0.1 > /tmp/opencode.log 2>&1 &
+          ( cd backend/bridge/opencode-bridge && \
+            OPENCODE_ROOT_PATH="$GITHUB_WORKSPACE" BRIDGE_HOST=127.0.0.1 \
+            node server.js > /tmp/bridge.log 2>&1 & )
+
+          # Wait for the bridge's COMPOSITE health: it reports OpenCode's state
+          # too, and a healthy bridge in front of a dead OpenCode is exactly the
+          # state that produces silent empty replies.
+          for i in $(seq 1 60); do
+            if curl -fsS -m 5 http://127.0.0.1:4098/api/health 2>/dev/null | grep -q '"success":true'; then
+              echo "bridge and opencode are ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "::error::bridge/opencode did not become healthy in 60s"
+          echo "--- opencode.log ---"; cat /tmp/opencode.log || true
+          echo "--- bridge.log ---";   cat /tmp/bridge.log   || true
+          exit 1
+
+      - name: Run the job
+        env:
+          SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # Read-only, one view, no PII. See 20260915b_discipleship_signals.sql.
+          DATABASE_URL: ${{ secrets.SELAH_ANALYST_DATABASE_URL }}
+          BRIDGE_URL: http://127.0.0.1:4098
+        run: |
+          ARGS="--job ${{ inputs.job_id }}"
+          [ -n "${{ inputs.model }}" ] && ARGS="$ARGS --model ${{ inputs.model }}"
+          # shellcheck disable=SC2086
+          node scripts/run-agent-job.js $ARGS
+
+      # The job row already carries the failure reason for the app to show;
+      # these are for diagnosing the stack itself.
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-job-${{ github.run_id }}
+          path: |
+            /tmp/opencode.log
+            /tmp/bridge.log
+          if-no-files-found: ignore
+          retention-days: 14
