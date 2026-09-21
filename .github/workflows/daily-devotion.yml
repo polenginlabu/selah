@@ -1,12 +1,19 @@
-name: Daily devotion and background
+name: Daily devotion
 
-# Generates the day's SELAH content: one devotion, and one background image for
-# the Scripture-sharing verse cards.
+# Generates one SELAH devotion for the day and writes it to Supabase.
 #
-# Both run in ONE job on purpose. The expensive part of this workflow is
-# standing up the agent stack (a ~150 MB OpenCode install plus the bridge), and
-# the background generator talks to exactly the same bridge the devotion does.
-# A second job would pay that cost twice for one extra model call.
+# DAILY BACKGROUND GENERATION IS NOT RUN HERE.
+#
+# It used to be a second step in this job. Gemini image generation has no free
+# tier — an unbilled key returns `limit: 0` for every image model — so with
+# billing off the step could only ever fail, and a red cross every morning
+# teaches everyone to ignore the one that eventually matters.
+#
+# Nothing was deleted. scripts/generate-daily-background.js still works and can
+# be run by hand, and backgrounds are supplied by scripts/upload-background.js
+# in the meantime. To put it back: enable billing, then re-add a step running
+# `node scripts/generate-daily-background.js` with the FIREBASE_* secrets.
+# See README > Verse sharing with daily backgrounds.
 #
 # The whole agent stack — `opencode serve` and the bridge — is started inside
 # the runner, used, and thrown away with it. Nothing persistent runs anywhere:
@@ -20,13 +27,6 @@ name: Daily devotion and background
 #   SUPABASE_SERVICE_ROLE_KEY   Supabase > Project Settings > API > service_role.
 #                               Bypasses every RLS policy; only this job uses it.
 #   VITE_SUPABASE_URL           already set for the deploy workflow; reused here.
-#   FIREBASE_SERVICE_ACCOUNT    a Firebase service account JSON key, base64 or raw,
-#                               with the Storage Object Admin role. Writes the
-#                               generated backgrounds; never reaches the browser.
-#   FIREBASE_STORAGE_BUCKET     e.g. devotional-app-c2633.firebasestorage.app
-#   GEMINI_API_KEY              optional. Only the image model needs it, and
-#                               only if OpenCode's google provider is not
-#                               already authenticated by auth.json.
 
 on:
   schedule:
@@ -51,16 +51,7 @@ on:
         required: false
         type: string
       force:
-        description: "Replace the day's devotion AND background if they already exist"
-        required: false
-        type: boolean
-        default: false
-      background_model:
-        description: 'Override the image model, e.g. google/gemini-3.1-flash-image'
-        required: false
-        type: string
-      skip_background:
-        description: 'Generate only the devotion, no background image'
+        description: "Replace the day's devotion if one already exists"
         required: false
         type: boolean
         default: false
@@ -164,53 +155,6 @@ jobs:
           [ "${{ inputs.force }}" = "true" ] && ARGS="$ARGS --force"
           # shellcheck disable=SC2086
           node scripts/generate-daily-devotion.js $ARGS
-
-      # Runs even when the devotion step failed. The two are independent
-      # products: a devotion rejected for being 380 words instead of 500 says
-      # nothing about whether an image can be generated, and skipping the
-      # background would leave every verse card on the fallback gradient over
-      # an unrelated failure. If the bridge itself is dead this fails fast on
-      # its own health check.
-      #
-      # The job still reports failure if either step failed — `!cancelled()`
-      # changes when this runs, not whether the workflow passes.
-      # Gated on a repository variable so a nightly run does not fail for a
-      # reason no code change can fix. Gemini image generation has no free
-      # tier — an unbilled key returns `limit: 0` for every image model — so
-      # until billing is enabled on the project behind GEMINI_API_KEY this step
-      # can only ever fail, and a red cross every morning trains everyone to
-      # ignore the one that eventually matters.
-      #
-      # Turn it on with: Settings > Secrets and variables > Actions >
-      # Variables > New variable, ENABLE_BACKGROUND = true
-      #
-      # Manual dispatch ignores the gate, so the step can always be tested.
-      - name: Generate today's background
-        if: >-
-          ${{ !cancelled() && inputs.skip_background != true &&
-              (vars.ENABLE_BACKGROUND == 'true' || github.event_name == 'workflow_dispatch') }}
-        env:
-          SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          FIREBASE_STORAGE_BUCKET: ${{ secrets.FIREBASE_STORAGE_BUCKET }}
-          # Optional, and only for the image model. OpenCode reaches Gemini
-          # through its `google` provider, which takes its key from auth.json —
-          # except where a config sets `apiKey: "{env:GEMINI_API_KEY}"`, which
-          # resolves to EMPTY when the variable is unset and fails with a 403
-          # "unregistered caller" rather than anything mentioning credentials.
-          # The runner has no such config today, so auth.json is used and this
-          # is unnecessary; setting the secret makes the job independent of
-          # that staying true.
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          BRIDGE_URL: http://127.0.0.1:4098
-        run: |
-          ARGS=""
-          [ -n "${{ inputs.date }}" ] && ARGS="$ARGS --date ${{ inputs.date }}"
-          [ -n "${{ inputs.background_model }}" ] && ARGS="$ARGS --model ${{ inputs.background_model }}"
-          [ "${{ inputs.force }}" = "true" ] && ARGS="$ARGS --force"
-          # shellcheck disable=SC2086
-          node scripts/generate-daily-background.js $ARGS
 
       # Agent output that failed validation. Keeps a bad night diagnosable
       # without paying for another research run.

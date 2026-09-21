@@ -243,6 +243,14 @@ Select a verse in the Bible reader, tap **Share**, and SELAH renders a 1080×192
 Scripture card: the verse, its reference, the translation, the SELAH wordmark,
 and the day's background image.
 
+> **Automatic generation is currently OFF.** Gemini image generation has no
+> free tier — an unbilled key returns `limit: 0` for every image model — so the
+> nightly step was removed from the workflow rather than failing every morning.
+> Backgrounds are supplied by **`npm run background:upload`** (below), which is
+> how today's got there. Nothing was deleted: `generate-daily-background.js`
+> still works and can be run by hand once billing is enabled. See *Re-enabling
+> automatic generation* at the end of this section.
+
 The governing rule of this feature:
 
 > **AI generates the background. SELAH generates the Scripture card.**
@@ -258,7 +266,7 @@ can correct it. The prohibition is asserted in
 ### How it fits together
 
 ```
-GitHub Action (nightly, 19:00 UTC / 03:00 Manila)
+Manual, or a nightly Action once billing is enabled
   └─ scripts/generate-daily-background.js
        ├─ themeForDate(date)          deterministic theme + light motif
        ├─ runImageAgent()             OpenCode bridge → Nano Banana 2
@@ -452,6 +460,21 @@ rule is missing. See step 2 above.
 **Nothing at all happens on the card** — open the console. `getLatestBackground`
 warns rather than throws; a missing table (migration not pushed) or an RLS
 denial both surface there.
+
+### Re-enabling automatic generation
+
+1. Enable billing on the Google Cloud project that owns `GEMINI_API_KEY` —
+   check which project that is at aistudio.google.com/apikey, as AI Studio keys
+   often live in an auto-created project rather than your Firebase one.
+2. Confirm it worked before touching the workflow:
+   ```bash
+   npm run background:dry-run    # needs opencode serve + the bridge running
+   ```
+3. Add a step back to `.github/workflows/daily-devotion.yml`, after the devotion
+   step, running `node scripts/generate-daily-background.js` with
+   `FIREBASE_SERVICE_ACCOUNT` and `FIREBASE_STORAGE_BUCKET` in its `env`.
+
+Roughly $0.03-0.04 per image, one a day, shared by every user — about $1/month.
 
 ### Future: the background gallery
 
