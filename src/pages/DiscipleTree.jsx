@@ -186,6 +186,10 @@ export default function DiscipleTree() {
   const [searchOpen, setSearchOpen] = useState(false)
   const [consolidation, setConsolidation] = useState(null)
   const [consolidating, setConsolidating] = useState(false)
+  // The run happens in a GitHub Actions runner, which spends its first minute
+  // or two installing OpenCode. A spinner alone for that long is
+  // indistinguishable from something hung, so report elapsed time and phase.
+  const [consolidationProgress, setConsolidationProgress] = useState(null)
   const scrollRef = useRef(null)
 
   const loadTree = useCallback(async () => {
@@ -433,7 +437,9 @@ export default function DiscipleTree() {
     setConsolidating(true)
     setConsolidation(null)
     try {
-      const report = await generateConsolidation()
+      const report = await generateConsolidation({
+        onProgress: (seconds, status) => setConsolidationProgress({ seconds, status }),
+      })
       setConsolidation(report)
       toast.success('Consolidation report generated.')
     } catch (err) {
@@ -441,6 +447,7 @@ export default function DiscipleTree() {
       toast.error(err.message || 'Failed to generate the consolidation report.')
     } finally {
       setConsolidating(false)
+      setConsolidationProgress(null)
     }
   }
 
@@ -498,9 +505,19 @@ export default function DiscipleTree() {
         </span>
       </div>
       {consolidating && (
-        <div className="flex items-center gap-2 rounded-2xl border border-line bg-surface/50 p-4 text-xs text-muted">
-          <span className="h-4 w-4 animate-spin rounded-full border-2 border-line border-t-brand" />
-          Generating consolidation report…
+        <div className="flex items-start gap-2.5 rounded-2xl border border-line bg-surface/50 p-4 text-xs text-muted">
+          <span className="mt-0.5 h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-line border-t-brand" />
+          <div>
+            <p className="font-medium text-ink">
+              {consolidationProgress?.status === 'running' ? 'The agent is working' : 'Starting the runner'}
+              {consolidationProgress?.seconds > 0 && (
+                <span className="font-normal tabular-nums text-muted"> · {consolidationProgress.seconds}s</span>
+              )}
+            </p>
+            <p className="mt-1 leading-relaxed">
+              This runs on GitHub and takes a few minutes. You can leave this page — the report is saved.
+            </p>
+          </div>
         </div>
       )}
       {consolidation && <ConsolidationPanel report={consolidation} refName={refName} />}
