@@ -15,6 +15,7 @@ import {
   XIcon,
   CheckIcon,
 } from '../icons'
+import { getBridgeHealth, listBridgeModels, setBridgeModel } from '../data/bridge'
 import { formatDateShort, todayISO } from '../lib/date'
 import {
   isAdminEmail,
@@ -282,6 +283,162 @@ function DevotionPanel() {
           You can leave this page — the run continues on GitHub.
         </p>
       )}
+    </section>
+  )
+}
+
+/** A green/amber/red dot, so the state reads before the words do. */
+function StatusDot({ state }) {
+  const tone = { up: 'bg-emerald-500', down: 'bg-red-500', unknown: 'bg-line' }[state]
+  return <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${tone}`} aria-hidden="true" />
+}
+
+/**
+ * Agent bridge status.
+ *
+ * The bridge is what the nightly devotion talks to, and when it is down the
+ * symptom is a devotion that silently never appears. This makes that visible
+ * without opening an SSH session.
+ *
+ * Bridge health and OpenCode health are reported separately on purpose: a
+ * healthy bridge in front of a dead OpenCode is the exact state that produces
+ * empty replies rather than errors.
+ */
+function BridgePanel() {
+  const toast = useToast()
+  const [health, setHealth] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [models, setModels] = useState(null)
+  const [modelsError, setModelsError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const check = useCallback(async () => {
+    setLoading(true); setError('')
+    try {
+      setHealth(await getBridgeHealth())
+    } catch (err) {
+      setError(err.message); setHealth(null)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { check() }, [check])
+
+  async function loadModels() {
+    setModelsError('')
+    try {
+      const result = await listBridgeModels()
+      setModels(result.models)
+      if (result.error) setModelsError(result.error)
+    } catch (err) {
+      setModelsError(err.message)
+    }
+  }
+
+  async function chooseModel(qualified) {
+    setSaving(true)
+    try {
+      await setBridgeModel(qualified)
+      toast.success(`Bridge model set to ${qualified}.`)
+      await check()
+    } catch (err) {
+      toast.error(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const bridgeState = !health ? 'unknown' : health.bridgeUp ? 'up' : 'down'
+  const opencodeState = !health ? 'unknown' : health.opencodeUp ? 'up' : 'down'
+
+  return (
+    <section className="card space-y-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="eyebrow">Agent bridge</p>
+          <p className="mt-0.5 text-sm text-muted">
+            The OpenCode stack the nightly devotion runs through. When this is down, the
+            devotion simply never appears.
+          </p>
+        </div>
+        <button onClick={check} disabled={loading} className="btn-outline min-h-11 shrink-0 !px-3 disabled:opacity-40">
+          <RefreshIcon width={15} height={15} /> {loading ? 'Checking…' : 'Check'}
+        </button>
+      </div>
+
+      {error && <p role="alert" className="rounded-xl bg-raised p-3 text-sm text-muted">{error}</p>}
+
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div className="rounded-xl border border-line p-3">
+          <p className="flex items-center gap-2 text-sm font-semibold text-ink">
+            <StatusDot state={bridgeState} /> Bridge
+          </p>
+          <p className="mt-1 text-xs leading-relaxed text-muted">
+            {!health ? 'Not checked yet.'
+              : !health.reachable ? 'Unreachable — the server or tunnel is down.'
+              : health.bridgeUp ? 'Responding.' : `Reachable but unhealthy${health.status ? ` (HTTP ${health.status})` : ''}.`}
+          </p>
+        </div>
+        <div className="rounded-xl border border-line p-3">
+          <p className="flex items-center gap-2 text-sm font-semibold text-ink">
+            <StatusDot state={opencodeState} /> OpenCode
+          </p>
+          <p className="mt-1 text-xs leading-relaxed text-muted">
+            {!health ? 'Not checked yet.'
+              : health.opencodeUp ? 'Responding.'
+              : 'Not responding. Models will return empty replies rather than errors.'}
+          </p>
+        </div>
+      </div>
+
+      {health?.reachable && (
+        <dl className="space-y-1 rounded-xl bg-raised p-3 text-xs">
+          <div className="flex justify-between gap-3">
+            <dt className="text-muted">Active model</dt>
+            <dd className="truncate font-medium text-ink">{health.activeModel || 'bridge default'}</dd>
+          </div>
+          <div className="flex justify-between gap-3">
+            <dt className="text-muted">Workspace root</dt>
+            <dd className="truncate font-mono text-[0.7rem] text-ink">{health.rootPath || '—'}</dd>
+          </div>
+        </dl>
+      )}
+
+      {health?.error && <p className="rounded-xl bg-raised p-3 text-xs leading-relaxed text-muted">{health.error}</p>}
+
+      <div>
+        {models === null ? (
+          <button onClick={loadModels} disabled={!health?.bridgeUp} className="btn-outline min-h-11 w-full disabled:opacity-40">
+            List available models
+          </button>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-xs text-muted">{models.length} model(s). Choosing one sets the bridge default.</p>
+            <div className="max-h-60 space-y-1 overflow-y-auto">
+              {models.map((m) => (
+                <button
+                  key={m.qualified}
+                  onClick={() => chooseModel(m.qualified)}
+                  disabled={saving}
+                  aria-pressed={health?.activeModel === m.qualified}
+                  className={`flex min-h-11 w-full items-center justify-between gap-3 rounded-xl border px-3 text-left disabled:opacity-40 ${
+                    health?.activeModel === m.qualified ? 'border-brand bg-brand-wash' : 'border-line'
+                  }`}
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-medium text-ink">{m.name}</span>
+                    <span className="block truncate text-[0.7rem] text-muted">{m.qualified}</span>
+                  </span>
+                  {health?.activeModel === m.qualified && <CheckIcon width={16} height={16} className="shrink-0 text-brand-strong dark:text-brand" />}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {modelsError && <p className="mt-2 text-xs text-muted">{modelsError}</p>}
+      </div>
     </section>
   )
 }
@@ -579,6 +736,8 @@ export default function Admin() {
         <StatCard icon={ZapIcon} value={totalXp.toLocaleString()} label="Total XP" />
         <StatCard icon={UsersIcon} value={totalDisciples} label="Disciples" />
       </div>
+
+      <BridgePanel />
 
       <DevotionPanel />
 

@@ -59,6 +59,13 @@ const EMPTY_SOAP = {
   prayer: '',
 }
 
+// The passage may already begin with the source translation's own quote mark
+// (ESV and friends lead quoted discourse with “). Drop a single outer quote so
+// wrapping this verse in “ … ” below never produces ““…”.
+function stripOuterQuote(text) {
+  return String(text ?? '').trim().replace(/^[“"']/, '').replace(/[”"']$/, '')
+}
+
 const draftKey = (id) => `devotion-draft:${id}`
 
 function getDraft(id) {
@@ -364,7 +371,7 @@ export default function DevotionEditor() {
               <XIcon width={10} height={10} />
             </button>
           </div>
-          <p className="mt-1.5 font-sans text-sm italic leading-relaxed text-ink/85">“{verse.text}”</p>
+          <p className="mt-1.5 font-sans text-sm italic leading-relaxed text-ink/85">“{stripOuterQuote(verse.text)}”</p>
         </div>
       )}
       {!verse && (

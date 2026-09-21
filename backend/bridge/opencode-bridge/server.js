@@ -36,6 +36,20 @@ const BRIDGE_PORT = parseInt(process.env.BRIDGE_PORT || "4098", 10);
 // a public IP and no filtering.
 const BRIDGE_HOST = process.env.BRIDGE_HOST || "127.0.0.1";
 
+// Shared secret for requests that arrive from outside this machine.
+//
+// The bridge runs an agent with filesystem access and has no user accounts, so
+// until now the ONLY thing protecting it was that it listens on loopback. The
+// moment anything off-box needs to reach it — the SELAH admin console checking
+// whether the agent is up — that protection is gone, and the port becomes a
+// remote shell for whoever finds it.
+//
+// So: when BRIDGE_TOKEN is set, every /api route requires it. Leave it unset
+// for purely local use (the devotion generator on a laptop, the GitHub Action,
+// which both reach the bridge over loopback and would only be inconvenienced
+// by a secret). Set it anywhere the bridge is reachable from the internet.
+const BRIDGE_TOKEN = process.env.BRIDGE_TOKEN || "";
+
 // ─── In-memory session & model store ─────────────────────────────────────────
 // Stores multiple sessions so the user can switch between chats.
 // Each session tracks its OpenCode session ID and local metadata.
@@ -89,9 +103,65 @@ app.use(
   cors({
     origin: "*",
     methods: ["GET", "POST", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
+
+// Constant-time compare, so a caller cannot learn the token one character at a
+// time from how long the rejection takes.
+function tokenMatches(presented) {
+  const expected = BRIDGE_TOKEN;
+  if (presented.length !== expected.length) return false;
+  let diff = 0;
+  for (let i = 0; i < expected.length; i += 1) {
+    diff |= presented.charCodeAt(i) ^ expected.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+/**
+ * Did this request come through a reverse proxy — i.e. from off this machine?
+ *
+ * The socket address is useless for this: a proxy on the same box connects
+ * over loopback, so every forwarded request looks local. The forwarding
+ * headers are what actually distinguish them.
+ */
+function arrivedViaProxy(req) {
+  return Boolean(
+    req.get("x-forwarded-for") ||
+    req.get("x-forwarded-host") ||
+    req.get("x-forwarded-proto") ||
+    req.get("x-real-ip")
+  );
+}
+
+app.use("/api", (req, res, next) => {
+  // Preflight carries no Authorization header by design.
+  if (req.method === "OPTIONS") return next();
+
+  // FAIL SAFE. Publishing a path to this bridge is a deliberate act (an
+  // .htaccess proxy rule), but setting BRIDGE_TOKEN is a separate one, and
+  // doing the first without the second would hand the internet an agent with
+  // filesystem access. So a request that arrived through a proxy is refused
+  // outright when no token is configured, rather than being served because
+  // the bridge happens to be in its permissive local mode.
+  if (!BRIDGE_TOKEN) {
+    if (arrivedViaProxy(req)) {
+      console.warn("[auth] refused a proxied request: BRIDGE_TOKEN is not set");
+      return res.status(401).json({
+        error: "This bridge is reachable from outside but has no BRIDGE_TOKEN set. Refusing.",
+      });
+    }
+    return next();
+  }
+
+  const header = req.get("authorization") || "";
+  const presented = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+  if (!presented || !tokenMatches(presented)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  return next();
+});
 
 // ─── Helper: call OpenCode server API ────────────────────────────────────────
 
@@ -1468,7 +1538,13 @@ app.listen(BRIDGE_PORT, BRIDGE_HOST, () => {
 ╚═══════════════════════════════════════════════════════════╝
   `);
 
-  if (BRIDGE_HOST === "0.0.0.0") {
+  console.log(
+    BRIDGE_TOKEN
+      ? "  Auth: BRIDGE_TOKEN is set — /api requires a bearer token.\n"
+      : "  Auth: BRIDGE_TOKEN is NOT set — /api is open to anyone who can reach it.\n"
+  );
+
+  if (BRIDGE_HOST === "0.0.0.0" && !BRIDGE_TOKEN) {
     console.warn(
       "\n  WARNING: bound to 0.0.0.0 with no authentication.\n" +
       "  Anyone who can reach this port can run an agent with filesystem\n" +

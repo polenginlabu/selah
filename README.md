@@ -462,6 +462,90 @@ change, not a migration.
 
 ---
 
+## Agent bridge status (admin)
+
+The Admin console has an **Agent bridge** panel that reports whether the
+OpenCode stack behind the nightly devotion is alive, lists the models it can
+reach, and sets the bridge's default model.
+
+Bridge health and OpenCode health are shown separately on purpose: a healthy
+bridge in front of a dead OpenCode is the state that produces silent empty
+replies rather than errors, and it is worth being able to see that.
+
+### The browser never talks to the bridge
+
+```
+browser → bridge-admin Edge Function → (token) → reverse proxy → 127.0.0.1:4098
+           └ is_admin() in the database    └ server-side secret
+```
+
+The bridge has no user accounts and runs an agent with filesystem access — its
+own source says the only thing protecting it is that it listens on loopback.
+Pointing the browser at it directly would mean publishing that port, and a token
+shipped in a Vite bundle is public the moment it deploys. So the token lives in
+the Edge Function, which checks `is_admin()` in the database first and forwards
+only three named actions. It is a whitelist, never an arbitrary path — otherwise
+it would be a general-purpose proxy into the private network.
+
+### Setup
+
+**1. Give the bridge a token.** It is optional and off by default, so purely
+local use (a laptop, the GitHub Action) is unaffected. Set it anywhere the
+bridge is reachable from outside the machine:
+
+```bash
+export BRIDGE_TOKEN="$(openssl rand -hex 32)"
+export OPENCODE_SERVER_PASSWORD="$(openssl rand -hex 32)"   # opencode serve warns when unset
+cd backend/bridge/opencode-bridge && npm start
+```
+
+The bridge prints which mode it is in on startup. Keep `BRIDGE_HOST=127.0.0.1`.
+
+**2. Expose it through the web server, not directly.** The bridge should stay on
+loopback and be reached over HTTPS through a path:
+
+```apache
+# Requires mod_proxy. Put it ABOVE the SPA rewrite so /bridge/ is not
+# swallowed by the index.html fallback.
+RewriteEngine On
+RewriteRule ^bridge/(.*)$ http://127.0.0.1:4098/$1 [P,L]
+```
+
+> **Check this works before relying on it.** `ProxyPass` is not permitted in
+> `.htaccess` at all, and the `[P]` rewrite flag needs `mod_proxy`, which shared
+> hosting plans frequently disable. Verify from your own machine:
+>
+> ```bash
+> curl -sS -o /dev/null -w '%{http_code}\n' https://your-domain/bridge/api/health
+> ```
+>
+> `401` means the proxy works and the token is being enforced — that is the
+> result you want. `404` or HTML means the proxy is not active, and the panel
+> cannot reach the bridge. If your plan does not allow proxying, the bridge
+> cannot be reached from Supabase at all, and the honest alternative is a
+> heartbeat: a cron on the box writes its status to a Supabase table and the
+> panel reads that row instead.
+
+**3. Give the Edge Function the secrets and deploy it:**
+
+```bash
+supabase secrets set BRIDGE_URL=https://your-domain/bridge
+supabase secrets set BRIDGE_TOKEN=the-same-value-as-step-1
+supabase functions deploy bridge-admin
+```
+
+### Troubleshooting
+
+| Panel says | Means |
+| --- | --- |
+| Unreachable | `BRIDGE_URL` is wrong, the proxy is not active, or the box is down |
+| Returned a web page rather than JSON | The proxy path is being caught by the SPA fallback — move the rule above it |
+| Rejected the token | `BRIDGE_TOKEN` in Supabase does not match the bridge's |
+| Bridge up, OpenCode down | `opencode serve` is not running, or died. Restart it |
+| Admins only | The signed-in account is not an admin according to `is_admin()` |
+
+---
+
 ## Notifications
 
 `enableNotifications(userId)` requests permission, registers `/firebase-messaging-sw.js`, retrieves an FCM token with the VAPID key, then upserts the token and the user's IANA timezone so reminders fire at the right local hour. Everything is guarded by `isSupported()` and feature checks, so unsupported browsers return `'unsupported'` instead of throwing.
