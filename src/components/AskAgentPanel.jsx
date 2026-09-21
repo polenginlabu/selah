@@ -41,7 +41,7 @@ export function AskAgentPanel() {
         <p className="eyebrow">Ask the agent</p>
         <p className="mt-0.5 text-sm leading-relaxed text-muted">
           Runs through OpenCode on the server. It can read the codebase to answer, but never
-          changes anything. Give it up to a minute.
+          changes anything. Give it up to two minutes.
         </p>
       </div>
 

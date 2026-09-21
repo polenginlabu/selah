@@ -62,12 +62,12 @@ type ActionName = keyof typeof ACTIONS
 // status check should never hold the page for long.
 const TIMEOUT_MS = 12_000
 
-// An ask drives a full agent session, which takes tens of seconds.
-// This must stay under the Edge Function's own execution timeout — raise that in
-// supabase/config.toml (see docs/discipleship/README.md). Tune with an env var.
-// Kept under the Supabase Edge Function wall-clock limit (150s on free), so
-// a slow answer fails with our message rather than a bare gateway error.
-const ASK_TIMEOUT_MS = Number(Deno.env.get('ASK_TIMEOUT_MS') ?? 120_000)
+// An ask drives a full agent session, which takes tens of seconds to a couple
+// of minutes. This must stay under the Edge Function's own execution timeout —
+// raised to 150s in supabase/config.toml ([functions.bridge-admin] timeout).
+// Kept under that so a slow answer fails with our message rather than a bare
+// gateway error. Tune with an env var.
+const ASK_TIMEOUT_MS = Number(Deno.env.get('ASK_TIMEOUT_MS') ?? 130_000)
 // big-pickle is outside the OpenCode workspace spending cap; every other
 // opencode/* model returns an empty reply once that cap is hit.
 const ASK_MODEL = Deno.env.get('ASK_MODEL') ?? 'opencode/big-pickle'
