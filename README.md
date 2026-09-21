@@ -568,6 +568,54 @@ supabase secrets set BRIDGE_TOKEN=the-same-value-as-step-1
 supabase functions deploy bridge-admin
 ```
 
+### Keeping it running
+
+`opencode serve` and the bridge both die when the SSH session closes, and
+CloudLinux reaps long-running processes on shared accounts anyway. Cron is the
+supervisor here — not systemd (no root) and not supervisord, which is itself a
+long-running process that something would have to restart.
+
+`deploy/hostinger/keepalive.sh` runs every few minutes, asks each process over
+HTTP whether it is answering, and starts whichever is not. It checks by asking
+rather than by `pgrep`, because a wedged process still has a pid; only a
+refused connection counts as down. A `401` from the token-protected bridge is a
+healthy answer and is treated as up.
+
+**1. Put the token where cron can read it** — outside the repo, so it is never
+committed:
+
+```bash
+printf 'BRIDGE_TOKEN=%s\n' "$BRIDGE_TOKEN" > ~/.selah-bridge.env
+chmod 600 ~/.selah-bridge.env
+```
+
+**2. Add the cron entry** (`crontab -e`, or hPanel -> Cron Jobs):
+
+```cron
+*/5 * * * * /bin/sh $HOME/selah-bridge/deploy/hostinger/keepalive.sh
+```
+
+Five minutes is a reasonable floor: a restart takes seconds, so the worst case
+is a few minutes of downtime, and the check costs two loopback requests when
+everything is healthy.
+
+**3. Watch it work:**
+
+```bash
+tail -f ~/keepalive.log     # only writes when it has to restart something
+tail -f ~/bridge.log
+```
+
+The script takes a lock (`mkdir`, which is atomic) so two overlapping runs
+cannot both decide a process is down and start two copies; a lock older than
+15 minutes is treated as stale and cleared. It trims its own logs at 2000
+lines, since shared accounts have a disk quota.
+
+Cron runs with a near-empty `PATH`, which is why the script sets one — without
+it neither `node` nor `opencode` would be found, and the failure would be a
+silent "command not found" in a log nobody reads.
+
+
 ### Troubleshooting
 
 | Panel says | Means |
