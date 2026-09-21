@@ -489,17 +489,49 @@ it would be a general-purpose proxy into the private network.
 
 ### Setup
 
-**1. Give the bridge a token.** It is optional and off by default, so purely
-local use (a laptop, the GitHub Action) is unaffected. Set it anywhere the
-bridge is reachable from outside the machine:
+**0. Put the code on the server.** The deploy workflow rsyncs `dist/` only, so
+`backend/` is never on the host. Clone the repo **outside the web root** —
+anything under `public_html` is downloadable, including `.env` files:
+
+```bash
+cd ~
+git clone https://github.com/polenginlabu/selah.git selah-bridge
+cd ~/selah-bridge
+npm run bridge:install          # installs the bridge's deps only
+```
+
+Needs Node on the host — `node -v` before anything else. `opencode` is a
+self-contained binary and runs anywhere; the bridge is a Node app and is not.
+
+**1. Run it, the same two commands as locally:**
+
+```bash
+opencode serve --port 4097 --hostname 127.0.0.1     # terminal 1
+npm run bridge                                      # terminal 2, from the repo root
+```
+
+`npm run bridge` is just `npm start --prefix backend/bridge/opencode-bridge`
+with the workspace root pinned to the repo, so there is no directory to
+remember and the agent is not told its world is the bridge folder.
+
+To survive logout, background it — though note that shared hosting reaps
+long-running processes regardless:
+
+```bash
+nohup npm run bridge > ~/bridge.log 2>&1 &
+```
+
+**2. Give it a token** if anything off-box will reach it. Optional and off by
+default, so a laptop and the GitHub Action are unaffected:
 
 ```bash
 export BRIDGE_TOKEN="$(openssl rand -hex 32)"
-export OPENCODE_SERVER_PASSWORD="$(openssl rand -hex 32)"   # opencode serve warns when unset
-cd backend/bridge/opencode-bridge && npm start
+export OPENCODE_SERVER_PASSWORD="$(openssl rand -hex 32)"
+npm run bridge
 ```
 
-The bridge prints which mode it is in on startup. Keep `BRIDGE_HOST=127.0.0.1`.
+The bridge prints which auth mode it is in on startup. Keep
+`BRIDGE_HOST=127.0.0.1` — the reverse proxy below is the only way in.
 
 **2. Expose it through the web server, not directly.** The bridge should stay on
 loopback and be reached over HTTPS through a path:

@@ -19,7 +19,9 @@
     "firebase:setup": "node scripts/setup-firebase-storage.js",
     "firebase:check": "node scripts/setup-firebase-storage.js --check",
     "background:upload": "node scripts/upload-background.js",
-    "check:cache": "node scripts/check-deploy-cache.js"
+    "check:cache": "node scripts/check-deploy-cache.js",
+    "bridge": "OPENCODE_ROOT_PATH=\"$PWD\" npm start --prefix backend/bridge/opencode-bridge",
+    "bridge:install": "npm ci --prefix backend/bridge/opencode-bridge"
   },
   "dependencies": {
     "@lottiefiles/dotlottie-react": "^0.19.16",
