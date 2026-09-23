@@ -31,24 +31,28 @@ export class BridgeError extends Error {}
  * @param {string} [opts.model]
  * @param {string} [opts.bridgeUrl]
  * @param {(phase: string, detail: string) => void} [opts.onProgress]
+ * @param {number} [opts.maxWaitMs] must stay under the bridge's own 10-minute
+ *   job deadline, so a slow run fails here with a clear message rather than
+ *   racing the bridge for which of the two gives up first.
  */
 export async function runAgent({
   prompt,
   model = DEFAULT_MODEL,
   bridgeUrl = DEFAULT_BRIDGE_URL,
   onProgress = () => {},
+  maxWaitMs = MAX_WAIT_MS,
 }) {
   const base = bridgeUrl.replace(/\/+$/, '')
 
   await assertBridgeReady(base)
   // A fresh session per run: the bridge keys off one global active session, so
   // without this a run inherits the previous run's conversation.
-  await post(base, '/api/sessions', { title: `selah-devotion-${Date.now()}` }).catch(() => {})
+  await post(base, '/api/sessions', { title: `selah-${Date.now()}` }).catch(() => {})
 
   const started = await post(base, '/api/chat/start', { message: prompt, model })
   if (!started?.jobId) throw new BridgeError('The bridge accepted the prompt but returned no job id.')
 
-  const deadline = Date.now() + MAX_WAIT_MS
+  const deadline = Date.now() + maxWaitMs
   let lastPhase = ''
 
   while (Date.now() < deadline) {
@@ -67,7 +71,7 @@ export async function runAgent({
     return status.response
   }
 
-  throw new BridgeError(`The agent did not finish within ${Math.round(MAX_WAIT_MS / 60000)} minutes.`)
+  throw new BridgeError(`The agent did not finish within ${Math.round(maxWaitMs / 60000)} minutes.`)
 }
 
 /** Nano Banana 2. See scripts/generate-daily-background.js. */

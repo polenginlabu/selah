@@ -36,6 +36,8 @@ import {
   unlinkDisciple,
   updateLifetimePhase,
 } from '../data/disciples'
+import { generateConsolidation, buildRefIndex } from '../data/consolidation'
+import { ConsolidationPanel } from '../components/ConsolidationPanel'
 
 const NODE_SIZE = 54
 const NODE_WIDTH = 88
@@ -182,6 +184,9 @@ export default function DiscipleTree() {
   const [moveTargetId, setMoveTargetId] = useState(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const scrollRef = useRef(null)
+  const [consolidation, setConsolidation] = useState(null)
+  const [consolidating, setConsolidating] = useState(false)
+  const [consolidationProgress, setConsolidationProgress] = useState(null)
 
   const loadTree = useCallback(async () => {
     if (user)
@@ -395,6 +400,31 @@ export default function DiscipleTree() {
     }
   }, [])
 
+  const refIndex = useMemo(() => buildRefIndex(Object.values(people)), [people])
+  const refName = useCallback((ref) => {
+    const person = refIndex[ref]
+    return person?.name ?? `Person ${ref}`
+  }, [refIndex])
+
+  const handleGenerateConsolidation = useCallback(async () => {
+    setConsolidating(true)
+    setConsolidation(null)
+    setConsolidationProgress(null)
+    try {
+      const report = await generateConsolidation({
+        onProgress: (_seconds, status) => setConsolidationProgress({ status }),
+      })
+      setConsolidation(report)
+      toast.success('Consolidation report generated.')
+    } catch (err) {
+      console.error('Failed to generate consolidation:', err)
+      toast.error(err.message || 'Failed to generate the consolidation report.')
+    } finally {
+      setConsolidating(false)
+      setConsolidationProgress(null)
+    }
+  }, [toast])
+
   const connectorPaths = useMemo(() => {
     const paths = []
     Object.values(people).forEach((person) => {
@@ -451,6 +481,16 @@ export default function DiscipleTree() {
           >
             <TargetIcon width={16} height={16} />
           </Link>
+          <button
+            onClick={handleGenerateConsolidation}
+            disabled={consolidating}
+            type="button"
+            aria-label="Generate consolidation report"
+            className="flex h-10 shrink-0 items-center gap-2 rounded-full border border-line bg-surface px-4 text-xs font-semibold text-ink transition-colors hover:bg-raised disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <SproutIcon width={15} height={15} className="text-brand" />
+            {consolidating ? 'Generating…' : 'Consolidation'}
+          </button>
         </div>
       </header>
       <div className="flex items-center gap-4 text-xs text-muted">
@@ -596,6 +636,13 @@ export default function DiscipleTree() {
         </div>
       )}
       <p className="text-center text-xs text-muted">Tap a node to see details · scroll to explore</p>
+      {consolidating && consolidationProgress?.status && (
+        <div className="card flex items-center gap-2 p-3 text-xs text-muted">
+          <SproutIcon width={13} height={13} className="animate-spin text-brand" />
+          The agent is working — {consolidationProgress.status}
+        </div>
+      )}
+      {consolidation && <ConsolidationPanel report={consolidation} refName={refName} />}
       {rootId && (
         <button
           type="button"

@@ -30,7 +30,9 @@
 }
 .bible-sheet[open] { display: flex; flex-direction: column; }
 .bible-sheet::backdrop { background: rgb(0 0 0 / 0.45); }
-.bible-passage { line-height: 1.95; overflow-wrap: break-word; }
+/* touch-action: pan-y keeps vertical scrolling and pinch-zoom native while
+   horizontal swipes are handed to the reader's gesture handler (chapter nav). */
+.bible-passage { line-height: 1.95; overflow-wrap: break-word; touch-action: pan-y pinch-zoom; }
 .bible-verse {
   cursor: pointer;
   padding: 4px 0;

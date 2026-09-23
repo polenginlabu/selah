@@ -59,14 +59,19 @@ const ALLOWED = [
 // as "job_" + base36, so we validate that shape rather than trusting the URL.
 const STATUS_PATTERN = '/api/chat/status/';
 
-// Every prompt this proxy will forward must begin with this.
+// Every prompt this proxy will forward must begin with one of these.
 //
 // WHY: /api/chat/start hands a message to an agent that has a checkout and
-// real tools. Requiring the framing that the frontend's buildAskTask produces
-// means even an admin (or a prompt-injected agent) is limited to asking a
-// question, not running arbitrary work. Keep this string in step with
-// src/data/agent.js -> buildAskTask().
-const REQUIRED_PROMPT_PREFIX = 'You are the SELAH assistant, answering a question from a church leader.';
+// real tools. Requiring the framing that the frontend produces means even an
+// admin (or a prompt-injected agent) is limited to the tasks those builders
+// create — an ask, or the consolidation report — not running arbitrary work.
+// Keep these in step with the builders:
+//   ASK_PREFIX             src/lib/askTask.js      -> buildAskTask()
+//   CONSOLIDATION_PREFIX   src/lib/consolidationTask.js -> buildConsolidationTask()
+const REQUIRED_PROMPT_PREFIXES = [
+    'You are the SELAH assistant, answering a question from a church leader.',
+    'You are the SELAH consolidation agent, producing the discipleship consolidation report.',
+];
 
 // Requests may come from the app's own origin (same-host, no CORS) or a local
 // dev server (cross-origin, needs CORS). Echo the origin only when it is one
@@ -246,11 +251,15 @@ if ($method === 'POST') {
         fail(413, 'Request body too large.');
     }
 
-    // A prompt must carry the expected framing — see REQUIRED_PROMPT_PREFIX.
+    // A prompt must carry the expected framing — see REQUIRED_PROMPT_PREFIXES.
     if ($path === '/api/chat/start') {
         $decoded = json_decode($body, true);
         $message = is_array($decoded) && isset($decoded['message']) ? (string) $decoded['message'] : '';
-        if (strpos($message, REQUIRED_PROMPT_PREFIX) !== 0) {
+        $allowed = false;
+        foreach (REQUIRED_PROMPT_PREFIXES as $prefix) {
+            if (strpos($message, $prefix) === 0) { $allowed = true; break; }
+        }
+        if (!$allowed) {
             fail(403, 'This prompt is not one this proxy will forward.');
         }
     }

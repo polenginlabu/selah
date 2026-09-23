@@ -33,10 +33,13 @@ backend/bridge/opencode-bridge/devotional-output.json
 .agents/
 .claude/
 
-# Local agent state and generated output. .opencode/ is this machine's session
-# store; graphify-out/ is a regenerable knowledge-graph dump that would bloat
-# the repo. Neither belongs in version control.
-.opencode/
+# Share project agent and command definitions, but keep local OpenCode plugins,
+# skills, dependencies, configuration, and generated state out of version control.
+.opencode/*
+!.opencode/agents/
+!.opencode/commands/
+
+# graphify-out/ is a regenerable knowledge-graph dump.
 graphify-out/
 
 # OS and tooling noise

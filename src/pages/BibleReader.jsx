@@ -12,6 +12,7 @@ import { formatSelectionReference } from '../../supabase/functions/_shared/bible
 import { BibleReaderSheet, BibleLocationPicker, BibleSearch } from '../components/BibleReaderSheet'
 import { VerseCardSheet } from '../components/VerseCard'
 import { getReadingPosition, saveReadingPosition } from '../data/readingPosition'
+import { swipeDirection } from '../lib/swipe'
 
 const ALL_BIBLES = [...API_BIBLES, ...LEGACY_BIBLES, ...PUBLIC_BIBLES]
 function readStored(key, fallback) {
@@ -49,6 +50,9 @@ export default function BibleReader() {
   const [verseMode, setVerseMode] = useState(() => readStored('bible:verseMode', false) === true)
   const pendingVerse = useRef(null)
   const articleRef = useRef(null)
+  const touchStartRef = useRef(null)
+  const swipedRef = useRef(false)
+  const focusPassageRef = useRef(false)
   // Cross-device sync bookkeeping. hydratedRef gates server writes until the
   // account position has been read (so opening the reader never clobbers it),
   // and the position refs stop a slow fetch from yanking the reader back if
@@ -88,6 +92,12 @@ export default function BibleReader() {
 
   useEffect(() => {
     if (!current || loading) return
+    // Keep keyboard focus in the passage when navigation came from an arrow
+    // key, otherwise it falls to <body> after the chapter re-renders.
+    if (focusPassageRef.current) {
+      focusPassageRef.current = false
+      articleRef.current?.focus({ preventScroll: true })
+    }
     trackBibleView(current.fumsToken)
     if (pendingVerse.current) {
       const target = current.verses.find((v) => v.verse <= pendingVerse.current && (v.endVerse ?? v.verse) >= pendingVerse.current)
@@ -179,6 +189,57 @@ export default function BibleReader() {
     if (chapter + delta > bookInfo.chapters) return goTo(BIBLE_BOOKS[index + 1].name, 1)
     goTo(book, chapter + delta)
   }
+  // Horizontal swipes on the passage change chapter. The start point is captured
+  // on touchstart (per finger, so a second finger never mis-matches the gesture);
+  // the decision happens on touchend so taps (verse selection) and vertical
+  // scroll keep their native behaviour. After a real swipe the synthetic click
+  // that follows is suppressed — but only until the next touch starts, or the
+  // suppression flag would swallow the user's next verse tap.
+  function handleTouchStart(e) {
+    swipedRef.current = false
+    // Abandon the gesture as soon as a second finger joins (pinch, etc.).
+    if (e.touches.length > 1) { touchStartRef.current = null; return }
+    const touch = e.touches[0]
+    touchStartRef.current = { id: touch.identifier, x: touch.clientX, y: touch.clientY, time: Date.now() }
+  }
+  function handleTouchEnd(e) {
+    const start = touchStartRef.current
+    touchStartRef.current = null
+    if (!start) return
+    const touch = [...e.changedTouches].find((t) => t.identifier === start.id)
+    if (!touch) return
+    const direction = swipeDirection({
+      dx: touch.clientX - start.x,
+      dy: touch.clientY - start.y,
+      duration: Date.now() - start.time,
+    })
+    if (direction) {
+      swipedRef.current = true
+      changeChapter(direction)
+    }
+  }
+  function handleTouchCancel() {
+    touchStartRef.current = null
+    swipedRef.current = false
+  }
+  function handleArticleClickCapture(e) {
+    if (swipedRef.current) {
+      swipedRef.current = false
+      e.preventDefault()
+      e.stopPropagation()
+    }
+  }
+  // Arrow keys mirror the swipe directions for keyboard navigation. Repeats and
+  // browser-shortcut combos (Alt+Arrow is back/forward, etc.) are ignored so
+  // holding a key cannot flip through chapters or double-fire with history nav.
+  function handlePassageKeyDown(e) {
+    if (e.repeat || e.altKey || e.ctrlKey || e.metaKey) return
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      e.preventDefault()
+      focusPassageRef.current = true
+      changeChapter(e.key === 'ArrowLeft' ? -1 : 1)
+    }
+  }
   function toggleVerse(verse) {
     setSelected((previous) => {
       const next = new Set(previous)
@@ -197,6 +258,8 @@ export default function BibleReader() {
   }
 
   return <div className="bible-reader pb-28">
+    {/* Announced to screen readers when the passage location changes. */}
+    <p className="sr-only" role="status" aria-live="polite">{book} {chapter}, {version.name}</p>
     <div className="mb-5 flex items-center justify-between">
       <div><p className="eyebrow">The living Word</p><h1 className="mt-1 text-2xl">Bible</h1></div>
       <div className="flex gap-1">
@@ -231,7 +294,8 @@ export default function BibleReader() {
     </div>}
 
     {current && !loading && !error && <>
-      <article ref={articleRef} aria-label={`${book} ${chapter}, ${version.name}`} className={`bible-passage ${font === 'serif' ? 'font-serif' : 'font-sans'}`} style={{ fontSize: `${fontSize}px` }}>
+      <article ref={articleRef} aria-label={`${book} ${chapter}, ${version.name}`} tabIndex={-1} className={`bible-passage ${font === 'serif' ? 'font-serif' : 'font-sans'}`} style={{ fontSize: `${fontSize}px` }}
+        onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} onTouchCancel={handleTouchCancel} onClickCapture={handleArticleClickCapture} onKeyDown={handlePassageKeyDown}>
         {paragraphs.map((group, i) => <div key={`${group.key}-${i}`}>
           {group.heading && <h3 className="mb-3 mt-8 font-display text-[0.8em] font-bold uppercase leading-snug tracking-[0.1em] text-brand-strong first:mt-0 dark:text-brand">{group.heading}</h3>}
           <p className={verseMode ? 'mb-3' : 'mb-6'}>{group.verses.map((verse) => <span key={verse.verse}>
