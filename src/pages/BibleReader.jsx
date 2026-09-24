@@ -12,6 +12,8 @@ import { formatSelectionReference } from '../../supabase/functions/_shared/bible
 import { BibleReaderSheet, BibleLocationPicker, BibleSearch } from '../components/BibleReaderSheet'
 import { VerseCardSheet } from '../components/VerseCard'
 import { getReadingPosition, saveReadingPosition } from '../data/readingPosition'
+import { getStoredHighlights, saveStoredHighlights, fetchHighlights, saveHighlights } from '../data/highlights'
+import { HIGHLIGHT_COLORS, isHighlightColor, applyColor, removeColors, hydrateHighlights } from '../lib/highlights'
 import { swipeDirection } from '../lib/swipe'
 
 const ALL_BIBLES = [...API_BIBLES, ...LEGACY_BIBLES, ...PUBLIC_BIBLES]
@@ -53,6 +55,25 @@ export default function BibleReader() {
   const touchStartRef = useRef(null)
   const swipedRef = useRef(false)
   const focusPassageRef = useRef(false)
+  // Verse highlighter: per-chapter map of { verse: color }, hydrated from
+  // localStorage (instant, offline, signed-out) then merged with the account
+  // copy once it arrives. hydrated gates server writes until the account rows
+  // have been read, so opening a chapter never clobbers another device's rows.
+  const [highlights, setHighlights] = useState(() => getStoredHighlights(book, chapter).verses)
+  const [highlightOpen, setHighlightOpen] = useState(false)
+  const highlightsHydratedRef = useRef(false)
+  // Which (book, chapter) the current highlights map belongs to, plus which
+  // verse keys this session edited before hydration finished. Together they
+  // make the async merge safe: a fetch that lands after the reader moved on
+  // is dropped (never a stale-key write or a wrong-account merge), and a
+  // quick pre-hydration tap is honoured instead of being reverted by the
+  // server copy. highlightsOwnerRef freezes which account owned the local
+  // copy at session/chapter start, and highlightsForRef scopes dirty edits to
+  // one account so a sign-out cannot leak them into the next sign-in.
+  const highlightsChapterRef = useRef({ book, chapter })
+  const highlightsOwnerRef = useRef(null)
+  const highlightsForRef = useRef(null)
+  const dirtyHighlightsRef = useRef(new Map())
   // Cross-device sync bookkeeping. hydratedRef gates server writes until the
   // account position has been read (so opening the reader never clobbers it),
   // and the position refs stop a slow fetch from yanking the reader back if
@@ -142,6 +163,72 @@ export default function BibleReader() {
   useEffect(() => { saveStored('bible:font', font) }, [font])
   useEffect(() => { saveStored('bible:verseMode', verseMode) }, [verseMode])
 
+  // Highlights load per chapter: reset to the local copy, then merge the
+  // account copy in once it arrives.
+  useEffect(() => {
+    const stored = getStoredHighlights(book, chapter)
+    highlightsHydratedRef.current = false
+    highlightsChapterRef.current = { book, chapter }
+    dirtyHighlightsRef.current = new Map()
+    setHighlights(stored.verses)
+  }, [book, chapter])
+
+  useEffect(() => {
+    // Close the gate on every run, not just chapter changes: a sign-in or a
+    // token refresh re-runs this effect, and while the fetch is in flight the
+    // persist effect must not upsert the never-merged local map over the
+    // account copy.
+    highlightsHydratedRef.current = false
+    // Dirty edits are scoped to one account: an auth transition (sign-in /
+    // sign-out) drops the previous account's dirty map so it can never leak
+    // into the next account's merge.
+    const identity = user?.id ?? null
+    if (highlightsForRef.current !== identity) dirtyHighlightsRef.current = new Map()
+    highlightsForRef.current = identity
+    // Freeze which account owned the local copy as of THIS session/chapter
+    // start — before any persist re-stamps the envelope — so the account
+    // check below never depends on storage a just-fired persist rewrote.
+    highlightsOwnerRef.current = getStoredHighlights(book, chapter).owner
+    if (!user) return
+    let cancelled = false
+    const sessionUid = user?.id ?? null
+    fetchHighlights(user.id, book, chapter)
+      .then((server) => {
+        if (cancelled) return
+        const stored = getStoredHighlights(book, chapter)
+        // Capture the dirty map here: the updater runs AFTER this .then body
+        // finishes (and the refs below are re-armed), so reading the ref
+        // inside the updater would see the fresh Map.
+        const dirty = dirtyHighlightsRef.current
+        const foreign = Boolean(highlightsOwnerRef.current) && highlightsOwnerRef.current !== user.id
+        setHighlights((current) => {
+          // A fetch that resolves after the reader moved to another chapter
+          // or switched accounts must not overwrite the new chapter/account's
+          // state. Only when the merge actually lands may the gate re-arm
+          // (idempotent ref writes; safe under StrictMode's double-invoke),
+          // so a failed or dropped fetch never unlocks a server write over
+          // rows we have not seen.
+          if (highlightsChapterRef.current.book !== book || highlightsChapterRef.current.chapter !== chapter) return current
+          if (highlightsForRef.current !== sessionUid) return current
+          highlightsHydratedRef.current = true
+          dirtyHighlightsRef.current = new Map()
+          return hydrateHighlights(stored.verses, server, { foreign, dirty })
+        })
+      })
+      .catch(() => { /* best-effort sync; the local copy still shows. The gate stays closed — without the account rows, writing could overwrite them. */ })
+    return () => { cancelled = true }
+  }, [user, book, chapter])
+
+  useEffect(() => {
+    // Only persist maps that belong to the chapter currently on screen (the
+    // chapter-identity ref is what makes a stale-merge commit a no-op above).
+    if (highlightsChapterRef.current.book !== book || highlightsChapterRef.current.chapter !== chapter) return
+    saveStoredHighlights(book, chapter, highlights, user?.id ?? null)
+    // Safe once hydrated: highlights is the merged local ∪ server map, so
+    // upserting it can't lose a verse already saved within a merge window.
+    if (user && highlightsHydratedRef.current) saveHighlights(user.id, book, chapter, highlights).catch(() => {})
+  }, [highlights])
+
   const selectedRows = useMemo(() => current?.verses.filter((v) => selected.has(v.verse)) ?? [], [current, selected])
   const selection = useMemo(() => selectedRows.length ? {
     reference: formatSelectionReference(book, chapter, selectedRows),
@@ -167,7 +254,7 @@ export default function BibleReader() {
   }, [current, verseMode])
 
   function goTo(nextBook, nextChapter, verse = null) {
-    setSheet(null); setSelected(new Set()); pendingVerse.current = verse
+    setSheet(null); setSelected(new Set()); setHighlightOpen(false); pendingVerse.current = verse
     if (nextBook === book && nextChapter === chapter && current && verse) {
       const match = current.verses.find((v) => v.verse <= verse && (v.endVerse ?? v.verse) >= verse)
       pendingVerse.current = null
@@ -240,6 +327,30 @@ export default function BibleReader() {
       changeChapter(e.key === 'ArrowLeft' ? -1 : 1)
     }
   }
+  // Paint the selected verses with a highlight color (tapping the same color
+  // again clears it); "Clear" removes them outright. Both write through the
+  // shared persist effect below. The dirty map records each edit so a merge
+  // landing while the account fetch is still in flight honours it instead of
+  // reverting it; setting refs inside the updater is idempotent (same key →
+  // same value), so StrictMode's double-invoke is safe.
+  function toggleHighlightColor(color) {
+    const verses = [...selected]
+    if (!verses.length) return
+    setHighlights((current) => {
+      const next = applyColor(current, verses, color)
+      for (const v of verses) dirtyHighlightsRef.current.set(String(v), next[String(v)] ?? null)
+      return next
+    })
+  }
+  function clearHighlights() {
+    const verses = [...selected]
+    if (!verses.length) return
+    setHighlights((current) => {
+      const next = removeColors(current, verses)
+      for (const v of verses) dirtyHighlightsRef.current.set(String(v), null)
+      return next
+    })
+  }
   function toggleVerse(verse) {
     setSelected((previous) => {
       const next = new Set(previous)
@@ -301,7 +412,7 @@ export default function BibleReader() {
           <p className={verseMode ? 'mb-3' : 'mb-6'}>{group.verses.map((verse) => <span key={verse.verse}>
           <span role="button" tabIndex={0} data-verse={verse.verse} aria-pressed={selected.has(verse.verse)} aria-label={`Select ${book} ${chapter}:${verse.label ?? verse.verse}`}
             onClick={() => toggleVerse(verse.verse)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleVerse(verse.verse) } }}
-            className={`bible-verse ${selected.has(verse.verse) ? 'bible-verse-selected' : ''}`}>
+            className={`bible-verse ${selected.has(verse.verse) ? 'bible-verse-selected' : ''}${isHighlightColor(highlights[verse.verse]) ? ` highlight-${highlights[verse.verse]}` : ''}`}>
             <sup className="mr-1.5 select-none font-sans text-[0.55em] font-semibold text-brand-strong dark:text-brand">{verse.label ?? verse.verse}</sup>{verse.text}
           </span>{' '}
         </span>)}</p>
@@ -318,12 +429,22 @@ export default function BibleReader() {
 
     {selection && !loading && !error && createPortal(<section aria-label="Selected verse actions" className="fixed inset-x-0 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-modal mx-auto max-w-xl px-3">
       <div className="rounded-2xl border border-line bg-surface p-3 shadow-lift">
-        <div className="flex items-center justify-between gap-3 pl-1"><p className="text-sm font-semibold text-ink">{selection.reference} <span className="ml-1 text-xs text-muted">{version.abbreviation}</span></p><button onClick={() => setSelected(new Set())} className="bible-icon-button !h-11 !w-11" aria-label="Clear selected verses"><XIcon width={17} height={17} /></button></div>
-        <div className="grid grid-cols-3 gap-2">
-          <button onClick={copySelection} className="btn-outline min-h-12 !px-2">Copy</button>
-          <button onClick={() => setCardOpen(true)} className="btn-outline min-h-12 !px-2"><ShareIcon width={16} height={16} /> Share</button>
-          <button onClick={() => navigate('/devotion/new', { state: { verse: selection } })} className="btn-primary min-h-12 !px-2"><PencilIcon width={16} height={16} /> Reflect</button>
+        <div className="flex items-center justify-between gap-3 pl-1"><p className="text-sm font-semibold text-ink">{selection.reference} <span className="ml-1 text-xs text-muted">{version.abbreviation}</span></p><button onClick={() => { setSelected(new Set()); setHighlightOpen(false) }} className="bible-icon-button !h-11 !w-11" aria-label="Clear selected verses"><XIcon width={17} height={17} /></button></div>
+        <div className="grid grid-cols-4 gap-2">
+          <button onClick={() => setHighlightOpen((open) => !open)} aria-pressed={highlightOpen} className="btn-outline min-h-12 whitespace-nowrap !px-2">Highlight</button>
+          <button onClick={copySelection} className="btn-outline min-h-12 whitespace-nowrap !px-2">Copy</button>
+          <button onClick={() => setCardOpen(true)} className="btn-outline min-h-12 whitespace-nowrap !px-2"><ShareIcon width={16} height={16} /> Share</button>
+          <button onClick={() => navigate('/devotion/new', { state: { verse: selection } })} className="btn-primary min-h-12 whitespace-nowrap !px-2"><PencilIcon width={16} height={16} /> Reflect</button>
         </div>
+        {highlightOpen && <div aria-label="Highlight colors" className="mt-2 flex items-center gap-2 rounded-xl bg-raised p-2">
+          <span className="pl-1 text-xs font-medium text-muted">Highlight</span>
+          {HIGHLIGHT_COLORS.map((color) => {
+            const painted = [...selected].every((v) => highlights[v] === color.id)
+            return <button key={color.id} onClick={() => toggleHighlightColor(color.id)} aria-label={`Highlight ${color.name}`} aria-pressed={painted}
+              className={`h-9 w-9 rounded-full border-2 transition ${painted ? 'border-brand scale-105' : 'border-transparent'}`} style={{ background: color.swatch }} />
+          })}
+          <button onClick={clearHighlights} className="ml-auto rounded-lg px-2 py-1 text-xs font-semibold text-muted hover:text-ink">Clear</button>
+        </div>}
       </div>
     </section>, document.body)}
 
@@ -336,7 +457,7 @@ export default function BibleReader() {
         {catalogueError && <p className="rounded-xl bg-raised p-3 text-xs text-muted">Could not check subscription access. You can retry a version or use WEB, KJV, or BBE.</p>}
         {ALL_BIBLES.map((option) => {
           const unavailable = option.bibleId && catalogue && !catalogue.some((b) => b.id === option.id)
-          return <button key={option.id} disabled={unavailable} onClick={() => { setPosition((p) => ({ ...p, translation: option.id })); setSelected(new Set()); pendingVerse.current = null; setSheet(null) }} aria-pressed={translation === option.id}
+          return <button key={option.id} disabled={unavailable} onClick={() => { setPosition((p) => ({ ...p, translation: option.id })); setSelected(new Set()); setHighlightOpen(false); pendingVerse.current = null; setSheet(null) }} aria-pressed={translation === option.id}
             className={`flex min-h-20 w-full items-center gap-3 rounded-2xl border p-4 text-left disabled:opacity-40 ${translation === option.id ? 'border-brand bg-brand-wash' : 'border-line bg-surface'}`}>
             <span className="flex h-12 w-14 shrink-0 items-center justify-center rounded-xl bg-raised text-xs font-bold text-brand-strong dark:text-brand">{option.abbreviation}</span>
             <span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-ink">{option.name}</span><span className="mt-1 block text-xs leading-relaxed text-muted">{unavailable ? 'Not enabled on the subscription' : option.description}</span></span>
