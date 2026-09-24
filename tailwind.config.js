@@ -28,7 +28,12 @@ export default {
       keyframes: {
         rise: {
           from: { opacity: '0', transform: 'translateY(6px)' },
-          to: { opacity: '1', transform: 'translateY(0)' },
+          /* `none`, not translateY(0): fill-mode: both keeps the final frame
+             applied forever, and ANY transform — even translateY(0) — turns
+             the element into a containing block for position:fixed
+             descendants (e.g. DailyDevotion's progress bar) so they scroll
+             with the page instead of staying on the viewport. */
+          to: { opacity: '1', transform: 'none' },
         },
         fadeIn: {
           from: { opacity: '0' },
