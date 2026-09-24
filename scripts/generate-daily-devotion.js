@@ -26,6 +26,7 @@ import { createClient } from '@supabase/supabase-js'
 import { buildDevotionPrompt, buildReformatPrompt } from './selah/prompt.js'
 import { runAgent, BridgeError, DEFAULT_MODEL } from './selah/bridge.js'
 import { extractJson, normalizeDevotion, toRow, DevotionError } from './selah/devotion.js'
+import { pickRandomTheme, slugify } from './selah/themes.js'
 
 const HISTORY_LOOKBACK = 45
 
@@ -128,13 +129,14 @@ async function main() {
 
     const { data: rows } = await admin
       .from('daily_devotions')
-      .select('date, topic, topic_label')
+      .select('date, topic, topic_label, theme, theme_label')
       .order('date', { ascending: false })
       .limit(HISTORY_LOOKBACK)
     history = (rows ?? []).map((r) => ({
       date: r.date,
       topic: r.topic,
       topicLabel: r.topic_label,
+      theme: r.theme ?? null,
     }))
     log(`history: ${history.length} previous devotion(s)`)
 
@@ -164,8 +166,21 @@ async function main() {
     }
   }
 
+  // --- Theme ---------------------------------------------------------------
+  // The admin's pinned theme wins; otherwise draw from the curated palette,
+  // skipping themes used in the last few days so the rotation does not repeat
+  // on itself (scripts/selah/themes.js). The pick is OURS and is persisted
+  // as-is: the agent is never asked to report a theme back, so the row always
+  // records exactly what was asked for.
+  const pinned = (config.theme || '').trim()
+  const theme = pinned ? { id: slugify(pinned), label: pinned } : pickRandomTheme({ history })
+
   // --- Generate ------------------------------------------------------------
-  const prompt = buildDevotionPrompt({ dateISO: date, history, config })
+  const prompt = buildDevotionPrompt({
+    dateISO: date,
+    history,
+    config: { ...config, theme: theme.label },
+  })
   const model = args.model ?? env.BRIDGE_MODEL
   // runAgent falls back to its own default when no model is passed, so log the
   // model that will actually run — not just "default".
@@ -219,6 +234,13 @@ async function main() {
     }
   }
 
+  // The theme moves into the devotion only here, after validation, so a retry
+  // that had to regenerate the content still carries the same pick (and never
+  // whatever the agent happened to write).
+  devotion.theme = theme.id
+  devotion.themeLabel = theme.label
+
+  log(`theme: ${theme.label}${pinned ? ' (admin override)' : ' (random pick)'}`)
   log(`topic: ${devotion.topicLabel} — "${devotion.title}"`)
   log(`scripture: ${devotion.keyScripture} (${devotion.keyScriptureTranslation})`)
   log(`thought: ${devotion.thought.split(/\s+/).length} words`)

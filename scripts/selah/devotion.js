@@ -4,6 +4,7 @@
 // or a database. The validation here is the last line of defence for the parts
 // of the SELAH brief a prompt cannot enforce on its own — above all section 2
 // and section 11, which forbid fabricated teachers and fabricated research.
+import { slugify } from './themes.js'
 
 /**
  * `kind` decides how the caller recovers, and the distinction matters:
@@ -102,7 +103,7 @@ export function normalizeDevotion(raw) {
   const researchPerformed = raw.researchPerformed === true
 
   const devotion = {
-    topic: slug(str(raw.topic) || str(raw.topicLabel)),
+    topic: slugify(str(raw.topic) || str(raw.topicLabel)),
     topicLabel: str(raw.topicLabel),
     title: str(raw.title),
     keyScripture: str(raw.keyScripture),
@@ -186,20 +187,14 @@ export function findLeakedSources(devotion) {
   )
 }
 
-function slug(value) {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60)
-}
-
 /** Maps a normalized devotion onto the daily_devotions row shape. */
 export function toRow(devotion, { date }) {
   return {
     date,
     topic: devotion.topic,
     topic_label: devotion.topicLabel,
+    theme: devotion.theme ?? null,
+    theme_label: devotion.themeLabel ?? null,
     title: devotion.title,
     key_scripture: devotion.keyScripture,
     key_scripture_text: devotion.keyScriptureText,

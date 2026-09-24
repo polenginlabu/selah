@@ -33,6 +33,8 @@ function mapRow(row) {
     id: row.id,
     date: row.date,
     topic: { id: row.topic, label: row.topic_label },
+    theme: row.theme ?? null,
+    themeLabel: row.theme_label ?? null,
     title: row.title,
     keyScripture: row.key_scripture,
     keyScriptureText: row.key_scripture_text,

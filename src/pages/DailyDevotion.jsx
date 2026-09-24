@@ -223,6 +223,11 @@ export default function DailyDevotion() {
             <span className="rounded-full bg-brand px-3 py-1 font-sans text-[0.65rem] font-bold uppercase tracking-[0.12em] text-on-brand">
               {devotion.topic.label}
             </span>
+            {devotion.themeLabel && (
+              <span className="rounded-full bg-white/10 px-3 py-1 font-sans text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-white/85">
+                {devotion.themeLabel}
+              </span>
+            )}
             <span className="font-sans text-xs text-white/50">{formatLongDate(date)}</span>
           </div>
           <h1 className="mt-3 font-display text-[1.7rem] font-extrabold leading-[1.12] tracking-[-0.04em] text-white text-balance">

@@ -33,6 +33,14 @@ import {
   getDevotionSettings,
   saveDevotionSettings,
 } from '../data/dailyDevotion'
+import { THEMES } from '../../scripts/selah/themes.js'
+import { getBackgroundForDate, listBackgrounds } from '../data/dailyBackgrounds'
+import { themeForDate } from '../../scripts/selah/background.js'
+import {
+  resizeImageToWebp,
+  uploadVerseBackground,
+  removeVerseBackground,
+} from '../lib/verseBackgroundUpload'
 
 function shortDate(timestamp) {
   return timestamp ? formatDateShort(timestamp.slice(0, 10)) : '—'
@@ -444,7 +452,10 @@ function BridgePanel() {
   )
 }
 
-const THEME_PRESETS = ['Peace', 'Joy', 'Hope', 'Faith', 'Gratitude', 'Rest', 'Courage']
+// Quick-pick chips. Derived from the generator's palette
+// (scripts/selah/themes.js) so the admin list and the nightly random draw can
+// never drift apart.
+const THEME_PRESETS = THEMES.map((t) => t.label)
 
 /**
  * Admin controls for the nightly devotion generator.
@@ -505,7 +516,7 @@ function DevotionSettingsPanel() {
       })
       setTeachers(cleanTeachers.map((t, i) => ({ key: i, ...t })))
       setNextKey(cleanTeachers.length)
-      toast.success(theme.trim() ? `Devotion theme set to “${theme.trim()}”.` : 'Devotions will use a random theme.')
+      toast.success(theme.trim() ? `Devotion theme set to “${theme.trim()}”.` : 'Each devotion will draw a theme at random.')
     } catch (err) {
       console.error('Failed to save devotion settings:', err)
       toast.error(err.message ?? 'Could not save settings.')
@@ -520,7 +531,7 @@ function DevotionSettingsPanel() {
         <p className="eyebrow">Devotion generator</p>
         <p className="mt-0.5 text-sm text-muted">
           These are read by the nightly run. A theme of “Peace” steers the whole devotion toward
-          it; leave it blank to let the agent pick randomly.
+          it; leave it blank to draw one at random from the curated themes.
         </p>
       </div>
 
@@ -539,7 +550,7 @@ function DevotionSettingsPanel() {
           value={theme}
           onChange={(e) => setTheme(e.target.value)}
           disabled={loading || saving}
-          placeholder="e.g. Peace — leave blank for random"
+          placeholder="e.g. Peace — leave blank for a random curated theme"
           className="input"
         />
         <div className="flex flex-wrap gap-1.5">
@@ -634,6 +645,228 @@ function DevotionSettingsPanel() {
           </>
         )}
       </button>
+    </section>
+  )
+}
+
+function BackgroundUploadPanel() {
+  const toast = useToast()
+  const [date, setDate] = useState(todayISO())
+  const [theme, setTheme] = useState(() => themeForDate(todayISO()).theme)
+  const [resized, setResized] = useState(null) // { blob, width, height } from resizeImageToWebp
+  const [previewUrl, setPreviewUrl] = useState(null)
+  const [pickError, setPickError] = useState(null)
+  const [existing, setExisting] = useState(null)
+  const [recent, setRecent] = useState([])
+  const [uploading, setUploading] = useState(false)
+  const [pendingDelete, setPendingDelete] = useState(null)
+  const [deleting, setDeleting] = useState(false)
+  const fileInput = useRef(null)
+
+  const loadRecent = useCallback(async () => {
+    const list = await listBackgrounds({ limit: 8 })
+    setRecent(list)
+  }, [])
+
+  useEffect(() => {
+    loadRecent()
+  }, [loadRecent])
+
+  // The day's deterministic theme is the default; moving the date follows it.
+  useEffect(() => {
+    setTheme(themeForDate(date).theme)
+  }, [date])
+
+  // A background already on this date should be called out before it is replaced.
+  useEffect(() => {
+    let cancelled = false
+    getBackgroundForDate(date).then((bg) => {
+      if (!cancelled) setExisting(bg)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [date])
+
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl)
+    }
+  }, [previewUrl])
+
+  const pick = async (file) => {
+    setPickError(null)
+    setResized(null)
+    if (previewUrl) URL.revokeObjectURL(previewUrl)
+    setPreviewUrl(null)
+    try {
+      const result = await resizeImageToWebp(file)
+      setResized(result)
+      setPreviewUrl(URL.createObjectURL(result.blob))
+    } catch (err) {
+      setPickError(err.message ?? 'Could not process that image.')
+    }
+  }
+
+  const save = async () => {
+    if (uploading || !resized) return
+    setUploading(true)
+    try {
+      await uploadVerseBackground({ date, theme, image: resized })
+      toast.success(`Background saved for ${date}.`)
+      setResized(null)
+      if (previewUrl) URL.revokeObjectURL(previewUrl)
+      setPreviewUrl(null)
+      setExisting(await getBackgroundForDate(date))
+      loadRecent()
+      if (fileInput.current) fileInput.current.value = ''
+    } catch (err) {
+      console.error('Failed to upload background:', err)
+      toast.error(err.message ?? 'Could not upload the background.')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const remove = async () => {
+    if (deleting || !pendingDelete) return
+    setDeleting(true)
+    try {
+      await removeVerseBackground({
+        date: pendingDelete.date,
+        storagePath: pendingDelete.storagePath,
+      })
+      toast.success(`Removed the background for ${pendingDelete.date}.`)
+      setPendingDelete(null)
+      setExisting((cur) => (cur?.date === pendingDelete.date ? null : cur))
+      loadRecent()
+    } catch (err) {
+      console.error('Failed to delete background:', err)
+      toast.error(err.message ?? 'Could not remove the background.')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  return (
+    <section className="card space-y-4">
+      <div>
+        <p className="eyebrow">Verse-card background</p>
+        <p className="mt-0.5 text-sm text-muted">
+          Upload an image for a day&rsquo;s verse-card background. It is resized in your browser to
+          the exact card format &mdash; 1080&times;1920 WebP, centre-cropped &mdash; before it ships.
+          Re-uploading a date replaces its background.
+        </p>
+      </div>
+
+      <div className="flex flex-wrap items-start gap-4">
+        <label className="flex aspect-[9/16] w-28 shrink-0 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-xl border border-dashed border-line bg-canvas text-center">
+          {previewUrl ? (
+            <img src={previewUrl} alt="Resized background preview" className="h-full w-full object-cover" />
+          ) : (
+            <span className="px-2 text-[0.68rem] leading-tight text-muted">
+              {pickError ? 'Try another image' : 'Choose an image'}
+            </span>
+          )}
+          <input
+            ref={fileInput}
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/gif"
+            className="sr-only"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              if (file) pick(file)
+            }}
+          />
+        </label>
+
+        <div className="min-w-0 flex-1 space-y-2">
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className="block">
+              <span className="text-xs font-semibold uppercase tracking-wide text-muted">Date</span>
+              <input
+                type="date"
+                value={date}
+                onChange={(e) => e.target.value && setDate(e.target.value)}
+                className="input"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs font-semibold uppercase tracking-wide text-muted">Theme</span>
+              <input
+                value={theme}
+                onChange={(e) => setTheme(e.target.value)}
+                placeholder="e.g. stillness"
+                className="input"
+              />
+            </label>
+          </div>
+
+          {existing && (
+            <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-300">
+              A background already exists for {date} ({existing.theme}). Saving will replace it.
+            </p>
+          )}
+          {pickError && <p className="text-xs text-red-600">{pickError}</p>}
+
+          <button
+            type="button"
+            onClick={save}
+            disabled={!resized || uploading}
+            className="btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {uploading
+              ? 'Uploading…'
+              : resized
+                ? `Save background for ${date}`
+                : 'Choose an image to enable saving'}
+          </button>
+        </div>
+      </div>
+
+      {/* Recent uploads — a quick way to verify a save and fix a bad one. */}
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted">Recent</p>
+        {recent.length === 0 ? (
+          <p className="mt-1 text-xs italic text-muted">No backgrounds yet.</p>
+        ) : (
+          <div className="mt-1.5 grid grid-cols-4 gap-2 sm:grid-cols-8">
+            {recent.map((bg) => (
+              <div
+                key={bg.id}
+                className="group relative aspect-[9/16] overflow-hidden rounded-lg border border-line"
+              >
+                <img
+                  src={bg.imageUrl}
+                  alt={`${bg.theme} background for ${bg.date}`}
+                  loading="lazy"
+                  className="h-full w-full object-cover"
+                />
+                <button
+                  type="button"
+                  onClick={() => setPendingDelete(bg)}
+                  title={`Delete the background for ${bg.date}`}
+                  className="absolute inset-x-0 top-0 flex items-center justify-center gap-1 bg-black/55 py-1 text-[0.65rem] font-semibold text-white opacity-0 transition-opacity group-hover:opacity-100"
+                >
+                  <TrashIcon width={11} height={11} /> {bg.date}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title={`Delete the ${pendingDelete.date} background?`}
+          body="Removes the row and the stored image. The verse card falls back to the previous background, and you can re-upload the same date any time."
+          confirmLabel="Delete background"
+          confirmPhrase={null}
+          busy={deleting}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={remove}
+        />
+      )}
     </section>
   )
 }
@@ -745,6 +978,8 @@ export default function Admin() {
       <DevotionPanel />
 
       <DevotionSettingsPanel />
+
+      <BackgroundUploadPanel />
 
       <div className="relative">
         <SearchIcon
