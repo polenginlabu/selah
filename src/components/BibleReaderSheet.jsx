@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { XIcon, ChevronLeftIcon, ChevronRightIcon, SearchIcon } from '../icons'
+import { XIcon, ChevronLeftIcon, ChevronRightIcon, SearchIcon, BookmarkIcon } from '../icons'
 import { BIBLE_BOOKS, getBook } from '../data/books'
 import { bibleRequest, searchResultLocation, trackBibleView } from '../data/bible'
 
@@ -115,5 +115,28 @@ export function BibleSearch({ translation, abbreviation, onSelect }) {
         </div>
       </>}
     </div>
+  </div>
+}
+
+// Local-only "saved for later" list (see src/lib/savedVerses.js). `groups` is
+// the grouped output of savedVerses.list(): newest-saved chapter first, verses
+// sorted ascending. Removing a verse here calls back so the reader can refresh
+// the list and the selection's saved state in one pass.
+export function SavedVersesSheet({ groups, currentBook, currentChapter, onRead, onRemove }) {
+  if (!groups.length) return <div className="flex flex-col items-center gap-3 py-10 text-center">
+    <BookmarkIcon width={28} height={28} className="text-muted" />
+    <p className="text-sm leading-relaxed text-muted">You haven’t saved any verses yet.<br />Select a verse in the Bible and choose Save for later.</p>
+  </div>
+  return <div className="space-y-5">
+    <p className="text-sm text-muted">Verses you saved for later, newest first. They live on this device only.</p>
+    {groups.map((g) => <div key={`${g.book}|${g.chapter}`}>
+      <h3 className="mb-2 flex items-baseline gap-2 text-sm font-bold text-ink">{g.book} <span className="text-brand-strong dark:text-brand">{g.chapter}</span>{(g.book === currentBook && g.chapter === currentChapter) && <span className="text-xs font-medium text-muted">· this chapter</span>}</h3>
+      <div className="flex flex-wrap gap-1.5">
+        {g.verses.map((v) => <span key={v} className="flex items-center overflow-hidden rounded-full border border-line bg-surface">
+          <button type="button" onClick={() => onRead(g.book, g.chapter, v)} aria-label={`Read ${g.book} ${g.chapter}:${v}`} className="min-h-10 px-3.5 text-sm font-semibold text-brand-strong hover:bg-raised dark:text-brand">{v}</button>
+          <button type="button" onClick={() => onRemove(g.book, g.chapter, v)} aria-label={`Remove ${g.book} ${g.chapter}:${v} from saved verses`} className="flex h-10 w-9 items-center justify-center border-l border-line text-muted hover:bg-raised hover:text-ink"><XIcon width={13} height={13} /></button>
+        </span>)}
+      </div>
+    </div>)}
   </div>
 }

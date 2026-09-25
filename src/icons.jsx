@@ -290,6 +290,26 @@ export const ShareIcon = (props) => (
   </svg>
 )
 
+export const CopyIcon = (props) => (
+  <svg {...ICON_PROPS} {...props}>
+    <rect x="9" y="9" width="12" height="12" rx="2" />
+    <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+  </svg>
+)
+
+export const BookmarkIcon = (props) => (
+  <svg {...ICON_PROPS} {...props}>
+    <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+  </svg>
+)
+
+export const HighlighterIcon = (props) => (
+  <svg {...ICON_PROPS} {...props}>
+    <path d="M6 13l5-5 5 5-5 5-5-5z" />
+    <path d="M4 20l3-3" />
+  </svg>
+)
+
 export const GoogleIcon = (props) => (
   <svg width={18} height={18} viewBox="0 0 24 24" {...props}>
     <path

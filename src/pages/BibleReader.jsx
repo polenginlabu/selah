@@ -1,19 +1,21 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { useAssistantPassage } from '../context/AssistantContext'
 import { useToast } from '../context/ToastContext'
 import { useAuth } from '../context/AuthContext'
-import { ChevronLeftIcon, ChevronRightIcon, ChevronDownIcon, PencilIcon, SearchIcon, BookOpenIcon, CheckIcon, XIcon, ShareIcon } from '../icons'
+import { ChevronLeftIcon, ChevronRightIcon, ChevronDownIcon, SearchIcon, BookOpenIcon, CheckIcon } from '../icons'
 import { BIBLE_BOOKS, getBook } from '../data/books'
 import { API_BIBLES, PUBLIC_BIBLES, bibleRequest, getBibleChapter, trackBibleView } from '../data/bible'
 import { LEGACY_BIBLES, getLegacyChapter } from '../data/bibleLegacy'
 import { formatSelectionReference } from '../../supabase/functions/_shared/bible.js'
-import { BibleReaderSheet, BibleLocationPicker, BibleSearch } from '../components/BibleReaderSheet'
+import { BibleReaderSheet, BibleLocationPicker, BibleSearch, SavedVersesSheet } from '../components/BibleReaderSheet'
 import { VerseCardSheet } from '../components/VerseCard'
+import VerseActions from '../components/VerseActions'
 import { getReadingPosition, saveReadingPosition } from '../data/readingPosition'
 import { getStoredHighlights, saveStoredHighlights, fetchHighlights, saveHighlights } from '../data/highlights'
-import { HIGHLIGHT_COLORS, isHighlightColor, applyColor, removeColors, hydrateHighlights } from '../lib/highlights'
+import { isHighlightColor, applyColor, removeColors, hydrateHighlights } from '../lib/highlights'
+import { savedVerses } from '../lib/savedVerses'
+import { tapVerse } from '../lib/selection'
 import { swipeDirection } from '../lib/swipe'
 
 const ALL_BIBLES = [...API_BIBLES, ...LEGACY_BIBLES, ...PUBLIC_BIBLES]
@@ -60,7 +62,14 @@ export default function BibleReader() {
   // copy once it arrives. hydrated gates server writes until the account rows
   // have been read, so opening a chapter never clobbers another device's rows.
   const [highlights, setHighlights] = useState(() => getStoredHighlights(book, chapter).verses)
-  const [highlightOpen, setHighlightOpen] = useState(false)
+  // YouVersion-style selection anchor: the first verse tapped, which a later
+  // tap extends a consecutive range from (see src/lib/selection.js).
+  const [anchor, setAnchor] = useState(null)
+  // Saved-verses bookkeeping. savedTick forces a re-read of the localStorage
+  // store when something toggles, so the sheet's "saved" state and the Saved
+  // list stay fresh without lifting the store into React state.
+  const [savedTick, setSavedTick] = useState(0)
+  const [savedGroups, setSavedGroups] = useState([])
   const highlightsHydratedRef = useRef(false)
   // Which (book, chapter) the current highlights map belongs to, plus which
   // verse keys this session edited before hydration finished. Together they
@@ -97,14 +106,17 @@ export default function BibleReader() {
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true); setError(''); setChapterData(null); setSelected(new Set())
+    setLoading(true); setError(''); setChapterData(null); setSelected(new Set()); setAnchor(null)
     const load = LEGACY_BIBLES.some((b) => b.id === translation) ? getLegacyChapter : getBibleChapter
     load(book, chapter, translation).then((data) => {
       if (cancelled) return
       setChapterData({ ...data, requestKey })
       if (pendingVerse.current) {
         const match = data.verses.find((v) => v.verse <= pendingVerse.current && (v.endVerse ?? v.verse) >= pendingVerse.current)
-        if (match) setSelected(new Set([match.verse]))
+        // Anchor the restored single verse so the tap model behaves as if the
+        // user tapped it: a follow-up tap extends the range, re-tapping clears,
+        // and closing the sheet returns focus to it.
+        if (match) { setSelected(new Set([match.verse])); setAnchor(match.verse) }
       }
     }).catch((err) => { if (!cancelled) setError(err.message || 'Could not load this chapter.') })
       .finally(() => { if (!cancelled) setLoading(false) })
@@ -254,12 +266,12 @@ export default function BibleReader() {
   }, [current, verseMode])
 
   function goTo(nextBook, nextChapter, verse = null) {
-    setSheet(null); setSelected(new Set()); setHighlightOpen(false); pendingVerse.current = verse
+    setSheet(null); setSelected(new Set()); setAnchor(null); pendingVerse.current = verse
     if (nextBook === book && nextChapter === chapter && current && verse) {
       const match = current.verses.find((v) => v.verse <= verse && (v.endVerse ?? v.verse) >= verse)
       pendingVerse.current = null
       if (match) {
-        setSelected(new Set([match.verse]))
+        setSelected(new Set([match.verse])); setAnchor(match.verse)
         articleRef.current?.querySelector(`[data-verse="${match.verse}"]`)?.scrollIntoView({ block: 'center' })
       }
     } else {
@@ -351,12 +363,10 @@ export default function BibleReader() {
       return next
     })
   }
-  function toggleVerse(verse) {
-    setSelected((previous) => {
-      const next = new Set(previous)
-      if (next.has(verse)) next.delete(verse); else next.add(verse)
-      return next
-    })
+  function handleVerseTap(verse) {
+    const next = tapVerse({ anchor, verses: selected }, verse)
+    setAnchor(next.anchor)
+    setSelected(next.verses)
   }
   // Sharing moved into the verse card sheet, which offers the image and keeps
   // a text option of its own. This is now only the clipboard.
@@ -367,10 +377,38 @@ export default function BibleReader() {
       toast.success('Verses copied.')
     } catch { toast.error('Could not copy. Please try again.') }
   }
+  // True only when EVERY selected verse is already saved — the sheet mirrors
+  // this as the toggle target (Save vs Saved). Re-reads on savedTick so a
+  // toggle elsewhere (the Saved sheet) stays in sync.
+  const allSaved = useMemo(() => selectedRows.length > 0 && selectedRows.every(
+    (v) => savedVerses.isSaved(book, chapter, v.verse)
+  ), [selectedRows, book, chapter, savedTick])
+  const hasHighlight = useMemo(() => selectedRows.some(
+    (v) => isHighlightColor(highlights[v.verse])
+  ), [selectedRows, highlights])
+  function handleToggleSave() {
+    if (!selectedRows.length) return
+    const target = !allSaved
+    for (const v of selectedRows) {
+      if (savedVerses.isSaved(book, chapter, v.verse) !== target) savedVerses.toggle(book, chapter, v.verse)
+    }
+    setSavedTick((n) => n + 1)
+    toast.success(target ? 'Saved for later.' : 'Removed from saved verses.')
+  }
+  function openSaved() {
+    setSavedGroups(savedVerses.list())
+    setSheet('saved')
+  }
+  function removeSaved(pathBook, pathChapter, verse) {
+    savedVerses.toggle(pathBook, pathChapter, verse)
+    setSavedTick((n) => n + 1)
+    setSavedGroups(savedVerses.list())
+  }
 
   return <div className="bible-reader pb-28">
     {/* Announced to screen readers when the passage location changes. */}
     <p className="sr-only" role="status" aria-live="polite">{book} {chapter}, {version.name}</p>
+    <p className="sr-only" role="status" aria-live="polite">{selection ? `${selection.reference} selected${selectedRows.length > 1 ? `, ${selectedRows.length} verses` : ''}` : ''}</p>
     <div className="mb-5 flex items-center justify-between">
       <div><p className="eyebrow">The living Word</p><h1 className="mt-1 text-2xl">Bible</h1></div>
       <div className="flex gap-1">
@@ -411,14 +449,14 @@ export default function BibleReader() {
           {group.heading && <h3 className="mb-3 mt-8 font-display text-[0.8em] font-bold uppercase leading-snug tracking-[0.1em] text-brand-strong first:mt-0 dark:text-brand">{group.heading}</h3>}
           <p className={verseMode ? 'mb-3' : 'mb-6'}>{group.verses.map((verse) => <span key={verse.verse}>
           <span role="button" tabIndex={0} data-verse={verse.verse} aria-pressed={selected.has(verse.verse)} aria-label={`Select ${book} ${chapter}:${verse.label ?? verse.verse}`}
-            onClick={() => toggleVerse(verse.verse)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleVerse(verse.verse) } }}
+            onClick={() => handleVerseTap(verse.verse)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleVerseTap(verse.verse) } }}
             className={`bible-verse ${selected.has(verse.verse) ? 'bible-verse-selected' : ''}${isHighlightColor(highlights[verse.verse]) ? ` highlight-${highlights[verse.verse]}` : ''}`}>
             <sup className="mr-1.5 select-none font-sans text-[0.55em] font-semibold text-brand-strong dark:text-brand">{verse.label ?? verse.verse}</sup>{verse.text}
           </span>{' '}
         </span>)}</p>
         </div>)}
       </article>
-      <p className="mt-7 text-center text-xs text-muted">Tap a verse to reflect, copy, or share.</p>
+      <p className="mt-7 text-center text-xs text-muted">Tap a verse to select it — then highlight, copy, share, or save it for later.</p>
       <div className="my-7 flex items-center justify-between gap-3 border-y border-line py-4">
         <button onClick={() => changeChapter(-1)} disabled={firstChapter} className="btn-ghost min-h-12 !px-2 disabled:opacity-30"><ChevronLeftIcon width={18} height={18} /> Previous</button>
         <span className="text-xs tabular-nums text-muted">{chapter} of {bookInfo.chapters}</span>
@@ -427,37 +465,43 @@ export default function BibleReader() {
       <footer className="text-xs leading-relaxed text-muted"><p>{current.copyright || current.translationName}</p>{apiTranslation && <a className="mt-2 inline-block min-h-11 py-3 underline underline-offset-4" href="https://api.bible" target="_blank" rel="noreferrer">Scripture provided by API.Bible</a>}</footer>
     </>}
 
-    {selection && !loading && !error && createPortal(<section aria-label="Selected verse actions" className="fixed inset-x-0 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-modal mx-auto max-w-xl px-3">
-      <div className="rounded-2xl border border-line bg-surface p-3 shadow-lift">
-        <div className="flex items-center justify-between gap-3 pl-1"><p className="text-sm font-semibold text-ink">{selection.reference} <span className="ml-1 text-xs text-muted">{version.abbreviation}</span></p><button onClick={() => { setSelected(new Set()); setHighlightOpen(false) }} className="bible-icon-button !h-11 !w-11" aria-label="Clear selected verses"><XIcon width={17} height={17} /></button></div>
-        <div className="grid grid-cols-4 gap-2">
-          <button onClick={() => setHighlightOpen((open) => !open)} aria-pressed={highlightOpen} className="btn-outline min-h-12 whitespace-nowrap !px-2">Highlight</button>
-          <button onClick={copySelection} className="btn-outline min-h-12 whitespace-nowrap !px-2">Copy</button>
-          <button onClick={() => setCardOpen(true)} className="btn-outline min-h-12 whitespace-nowrap !px-2"><ShareIcon width={16} height={16} /> Share</button>
-          <button onClick={() => navigate('/devotion/new', { state: { verse: selection } })} className="btn-primary min-h-12 whitespace-nowrap !px-2"><PencilIcon width={16} height={16} /> Reflect</button>
-        </div>
-        {highlightOpen && <div aria-label="Highlight colors" className="mt-2 flex items-center gap-2 rounded-xl bg-raised p-2">
-          <span className="pl-1 text-xs font-medium text-muted">Highlight</span>
-          {HIGHLIGHT_COLORS.map((color) => {
-            const painted = [...selected].every((v) => highlights[v] === color.id)
-            return <button key={color.id} onClick={() => toggleHighlightColor(color.id)} aria-label={`Highlight ${color.name}`} aria-pressed={painted}
-              className={`h-9 w-9 rounded-full border-2 transition ${painted ? 'border-brand scale-105' : 'border-transparent'}`} style={{ background: color.swatch }} />
-          })}
-          <button onClick={clearHighlights} className="ml-auto rounded-lg px-2 py-1 text-xs font-semibold text-muted hover:text-ink">Clear</button>
-        </div>}
-      </div>
-    </section>, document.body)}
+    {selection && !loading && !error && <VerseActions
+      reference={selection.reference}
+      translation={version.abbreviation}
+      count={selectedRows.length}
+      verses={selectedRows}
+      highlights={highlights}
+      allSaved={allSaved}
+      hasHighlight={hasHighlight}
+      onHighlight={toggleHighlightColor}
+      onClearHighlights={clearHighlights}
+      onCopy={copySelection}
+      onShare={() => setCardOpen(true)}
+      onReflect={() => navigate('/devotion/new', { state: { verse: selection } })}
+      onToggleSave={handleToggleSave}
+      onOpenSaved={openSaved}
+      onClose={() => {
+        // Clear the selection and hand focus back to the verse the user first
+        // tapped, so keyboard and screen-reader users land in the passage
+        // rather than on <body> after the sheet unmounts.
+        setSelected(new Set())
+        setAnchor(null)
+        requestAnimationFrame(() => {
+          articleRef.current?.querySelector(`[data-verse="${anchor}"]`)?.focus({ preventScroll: true })
+        })
+      }}
+    />}
 
     {cardOpen && selection && <VerseCardSheet selection={selection} translation={version.abbreviation} onClose={() => setCardOpen(false)} />}
 
-    {sheet && <BibleReaderSheet title={{ passage: 'Choose a passage', translation: 'Bible translations', appearance: 'Reading appearance', search: 'Search Scripture' }[sheet]} onClose={() => setSheet(null)}>
+    {sheet && <BibleReaderSheet title={{ passage: 'Choose a passage', translation: 'Bible translations', appearance: 'Reading appearance', search: 'Search Scripture', saved: 'Saved verses' }[sheet]} onClose={() => setSheet(null)}>
       {sheet === 'passage' && <BibleLocationPicker currentBook={book} currentChapter={chapter} onSelect={goTo} />}
       {sheet === 'translation' && <div className="space-y-3">
         <p className="text-sm leading-relaxed text-muted">Find the words that help you understand. Your place stays the same when you switch.</p>
         {catalogueError && <p className="rounded-xl bg-raised p-3 text-xs text-muted">Could not check subscription access. You can retry a version or use WEB, KJV, or BBE.</p>}
         {ALL_BIBLES.map((option) => {
           const unavailable = option.bibleId && catalogue && !catalogue.some((b) => b.id === option.id)
-          return <button key={option.id} disabled={unavailable} onClick={() => { setPosition((p) => ({ ...p, translation: option.id })); setSelected(new Set()); setHighlightOpen(false); pendingVerse.current = null; setSheet(null) }} aria-pressed={translation === option.id}
+          return <button key={option.id} disabled={unavailable} onClick={() => { setPosition((p) => ({ ...p, translation: option.id })); setSelected(new Set()); setAnchor(null); pendingVerse.current = null; setSheet(null) }} aria-pressed={translation === option.id}
             className={`flex min-h-20 w-full items-center gap-3 rounded-2xl border p-4 text-left disabled:opacity-40 ${translation === option.id ? 'border-brand bg-brand-wash' : 'border-line bg-surface'}`}>
             <span className="flex h-12 w-14 shrink-0 items-center justify-center rounded-xl bg-raised text-xs font-bold text-brand-strong dark:text-brand">{option.abbreviation}</span>
             <span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-ink">{option.name}</span><span className="mt-1 block text-xs leading-relaxed text-muted">{unavailable ? 'Not enabled on the subscription' : option.description}</span></span>
@@ -473,6 +517,7 @@ export default function BibleReader() {
         <div className={`rounded-2xl bg-raised p-5 ${font === 'serif' ? 'font-serif' : 'font-sans'}`} style={{ fontSize, lineHeight: 1.85 }}>A quiet place to read, reflect, and draw closer to God.</div>
       </div>}
       {sheet === 'search' && (apiTranslation ? <BibleSearch translation={translation} abbreviation={version.abbreviation} onSelect={(location) => goTo(location.book, location.chapter, location.verse)} /> : <div className="space-y-4"><p className="text-sm text-muted">Full-Bible search is available in NIV UK, MSG, and AMP. Choose one to search.</p>{API_BIBLES.map((b) => <button key={b.id} className="btn-outline min-h-12 w-full" onClick={() => setPosition((p) => ({ ...p, translation: b.id }))}>{b.name}</button>)}</div>)}
+      {sheet === 'saved' && <SavedVersesSheet groups={savedGroups} currentBook={book} currentChapter={chapter} onRead={(pathBook, pathChapter, verse) => goTo(pathBook, pathChapter, verse)} onRemove={removeSaved} />}
     </BibleReaderSheet>}
   </div>
 }

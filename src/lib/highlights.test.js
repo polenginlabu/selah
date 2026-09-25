@@ -20,12 +20,16 @@ import {
 } from './highlights.js'
 
 test('palette is a fixed whitelist with printable ids', () => {
-  assert.deepEqual(HIGHLIGHT_COLORS.map((c) => c.id), ['yellow', 'pink', 'green', 'blue'])
+  assert.deepEqual(HIGHLIGHT_COLORS.map((c) => c.id), [
+    'yellow', 'pink', 'green', 'blue', 'purple', 'orange',
+  ])
   assert.ok(HIGHLIGHT_COLORS.every((c) => /^[a-z]+$/.test(c.id) && c.swatch.startsWith('#')))
 })
 
 test('isHighlightColor only accepts palette ids', () => {
   assert.ok(isHighlightColor('yellow'))
+  assert.ok(isHighlightColor('purple'))
+  assert.ok(isHighlightColor('orange'))
   assert.ok(!isHighlightColor('red'))
   assert.ok(!isHighlightColor(''))
   assert.ok(!isHighlightColor('yellow; background: red'))
@@ -143,4 +147,17 @@ test('removeColors clears only the requested verses', () => {
 test('verse numbers are coerced to strings for stable keys', () => {
   assert.deepEqual(applyColor({}, [1, 2], 'green'), { 1: 'green', 2: 'green' })
   assert.equal(mergeHighlights({ '1': 'yellow' }, { 1: 'pink' })['1'], 'pink')
+})
+
+test('new palette colors flow through every storage boundary', () => {
+  assert.ok(sanitizeHighlights({ 2: 'purple', 5: 'orange' })[2] === 'purple')
+  assert.ok(sanitizeHighlights({ 2: 'purple', 5: 'orange' })[5] === 'orange')
+  assert.deepEqual(mergeHighlights({}, { 1: 'purple', 2: 'orange' }), { 1: 'purple', 2: 'orange' })
+  assert.deepEqual(applyColor({}, [2], 'purple'), { 2: 'purple' })
+  assert.deepEqual(hydrateHighlights({ 1: 'purple' }, { 2: 'orange' }), { 1: 'purple', 2: 'orange' })
+})
+
+test('applyColor toggles off with the new colors too', () => {
+  assert.deepEqual(applyColor({ 2: 'purple', 5: 'purple' }, [2, 5], 'purple'), {})
+  assert.deepEqual(applyColor({ 2: 'orange', 5: 'pink' }, [2, 5], 'orange'), { 2: 'orange', 5: 'orange' })
 })

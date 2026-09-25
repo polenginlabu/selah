@@ -14,11 +14,18 @@
 // that renumbers or bridges verses (MSG, some Psalms) can land a highlight on
 // a different text span. Accepted tradeoff, documented here.
 
+// The color ids are the contract with the server-side validator
+// (supabase/migrations/20260923_bible_highlights.sql, extended by
+// 20260925_bible_highlights_palette.sql) and with the localStorage copy.
+// Appending to this list is safe for old data; renaming or reordering ids is
+// not, because stored maps reference ids by string.
 export const HIGHLIGHT_COLORS = [
   { id: 'yellow', name: 'Yellow', swatch: '#facc15' },
   { id: 'pink', name: 'Pink', swatch: '#f472b6' },
   { id: 'green', name: 'Green', swatch: '#4ade80' },
   { id: 'blue', name: 'Blue', swatch: '#60a5fa' },
+  { id: 'purple', name: 'Purple', swatch: '#a78bfa' },
+  { id: 'orange', name: 'Orange', swatch: '#fb923c' },
 ]
 
 export const HIGHLIGHT_KEY_PREFIX = 'bible:highlights'

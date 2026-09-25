@@ -664,7 +664,7 @@ function BackgroundUploadPanel() {
   const fileInput = useRef(null)
 
   const loadRecent = useCallback(async () => {
-    const list = await listBackgrounds({ limit: 8 })
+    const list = await listBackgrounds({ limit: 20 })
     setRecent(list)
   }, [])
 
@@ -751,11 +751,12 @@ function BackgroundUploadPanel() {
   return (
     <section className="card space-y-4">
       <div>
-        <p className="eyebrow">Verse-card background</p>
+        <p className="eyebrow">Share-card backgrounds</p>
         <p className="mt-0.5 text-sm text-muted">
-          Upload an image for a day&rsquo;s verse-card background. It is resized in your browser to
-          the exact card format &mdash; 1080&times;1920 WebP, centre-cropped &mdash; before it ships.
-          Re-uploading a date replaces its background.
+          Uploaded images appear instantly in the Background strip when a verse card is shared from
+          the Bible reader — the same place the daily generated backgrounds appear. Each upload is
+          also a day&rsquo;s recommended background: today&rsquo;s date by default, and re-uploading a
+          date replaces that day&rsquo;s image.
         </p>
       </div>
 
@@ -790,6 +791,9 @@ function BackgroundUploadPanel() {
                 onChange={(e) => e.target.value && setDate(e.target.value)}
                 className="input"
               />
+              <span className="mt-1 block text-[0.7rem] leading-snug text-muted">
+                Which day this doubles as the recommended background.
+              </span>
             </label>
             <label className="block">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted">Theme</span>
@@ -818,15 +822,17 @@ function BackgroundUploadPanel() {
             {uploading
               ? 'Uploading…'
               : resized
-                ? `Save background for ${date}`
-                : 'Choose an image to enable saving'}
+                ? `Add background for ${date}`
+                : 'Choose an image to enable adding'}
           </button>
         </div>
       </div>
 
-      {/* Recent uploads — a quick way to verify a save and fix a bad one. */}
+      {/* The library behind the share-card Background strip — newest first. */}
       <div>
-        <p className="text-xs font-semibold uppercase tracking-wide text-muted">Recent</p>
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+          Uploaded backgrounds <span className="font-normal normal-case text-muted">· shown in the share picker</span>
+        </p>
         {recent.length === 0 ? (
           <p className="mt-1 text-xs italic text-muted">No backgrounds yet.</p>
         ) : (
@@ -859,7 +865,7 @@ function BackgroundUploadPanel() {
       {pendingDelete && (
         <ConfirmDialog
           title={`Delete the ${pendingDelete.date} background?`}
-          body="Removes the row and the stored image. The verse card falls back to the previous background, and you can re-upload the same date any time."
+          body="Removes it from the share-card library (and from the day it was assigned to). The verse card falls back to the previous background, and you can re-upload any time."
           confirmLabel="Delete background"
           confirmPhrase={null}
           busy={deleting}
