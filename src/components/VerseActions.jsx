@@ -95,12 +95,13 @@ export default function VerseActions({
   }, [])
 
   // Downward swipe on the compact sheet dismisses it: there is nothing to
-  // scroll, so the drag is ours. When the palette or More row is expanded the
-  // panel is scrolled instead (vertical drags pan the expanded content, and the
-  // ✕ button remains the dismissal). touch-action stays native so the browser
-  // never cancels the gesture mid-swipe.
+  // scroll, so the drag is ours. When the palette or More row is expanded, or
+  // the panel itself is scrollable (short viewport, zoom), vertical drags pan
+  // the content instead — the ✕ button remains the dismissal. touch-action
+  // stays native so the browser never cancels the gesture mid-swipe.
   function onPanelTouchStart(e) {
-    if (paletteOpen || moreOpen) { dragRef.current = null; return }
+    const panel = panelRef.current
+    if (paletteOpen || moreOpen || !panel || panel.scrollHeight > panel.clientHeight + 1) { dragRef.current = null; return }
     const touch = e.touches[0]
     dragRef.current = { id: touch.identifier, startY: touch.clientY, delta: 0 }
   }
@@ -114,6 +115,11 @@ export default function VerseActions({
     const drag = dragRef.current
     dragRef.current = null
     if (drag && drag.delta > 72) closeRef.current()
+  }
+  function onPanelTouchCancel() {
+    // An interrupted touch stream (browser-cancelled) must never count as a
+    // dismiss gesture.
+    dragRef.current = null
   }
 
   // Colors already applied to EVERY selected verse are shown as painted; the
@@ -138,6 +144,7 @@ export default function VerseActions({
         onTouchStart={onPanelTouchStart}
         onTouchMove={onPanelTouchMove}
         onTouchEnd={onPanelTouchEnd}
+        onTouchCancel={onPanelTouchCancel}
         className="verse-actions animate-rise motion-reduce:animate-none max-h-[min(60dvh,30rem)] overflow-y-auto overscroll-contain rounded-2xl border border-line bg-surface p-3 shadow-lift outline-none"
       >
         <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-line" aria-hidden="true" />

@@ -25,6 +25,17 @@ function span(from, to) {
   return out
 }
 
+// Verse numbers come from chapter data; no canonical chapter has more than
+// 176 verses (Psalm 119 is the largest). This is an exported pure boundary,
+// so hostile input (huge finite ints, unsafe ints, non-numbers) must never
+// reach span(): the bounds below keep the allocation bounded even for a
+// corrupt caller, and the span cap mirrors the server's 300-entry ceiling.
+const MAX_VERSE = 1000
+const MAX_SPAN = 300
+function validVerse(v) {
+  return Number.isSafeInteger(v) && v >= 1 && v <= MAX_VERSE
+}
+
 /**
  * The selection after the user taps verse `v`. Always returns a new selection
  * (never mutates the input).
@@ -32,13 +43,15 @@ function span(from, to) {
 export function tapVerse(selection, v) {
   const anchor = selection?.anchor ?? null
   const verses = selection?.verses instanceof Set ? selection.verses : new Set()
-  // Verse numbers come from chapter data, but this is an exported pure
-  // boundary: reject anything that is not a positive integer so span() can
-  // never be asked to run off the end (e.g. Infinity).
-  if (!Number.isInteger(v) || v < 1) return selection ?? emptySelection()
+  if (!validVerse(v)) return selection ?? emptySelection()
+  // A corrupt stored anchor is not a usable reference; start a fresh selection
+  // on the tapped verse instead of spanning garbage.
+  if (anchor !== null && !validVerse(anchor)) return { anchor: v, verses: new Set([v]) }
   if (anchor === null) return { anchor: v, verses: new Set([v]) }
   if (v === anchor) return emptySelection()
   if (verses.has(v)) return { anchor: v, verses: new Set([v]) }
+  // Cap the requested range so span() can never allocate an unbounded set.
+  if (Math.abs(anchor - v) + 1 > MAX_SPAN) return selection ?? emptySelection()
   return { anchor, verses: span(anchor, v) }
 }
 

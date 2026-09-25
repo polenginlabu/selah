@@ -266,8 +266,15 @@ export default function BibleReader() {
   }, [current, verseMode])
 
   function goTo(nextBook, nextChapter, verse = null) {
+    // Navigation targets can come from localStorage (saved entries, restored
+    // position) and passage pickers; a hostile or stale store can seed a
+    // non-canonical book. Refuse garbage instead of dereferencing an undefined
+    // bookInfo later, and normalize the chapter into the book's real range.
+    const nextInfo = getBook(nextBook)
+    if (!nextInfo) return
+    const targetChapter = Math.min(nextInfo.chapters, Math.max(1, Math.trunc(nextChapter) || 1))
     setSheet(null); setSelected(new Set()); setAnchor(null); pendingVerse.current = verse
-    if (nextBook === book && nextChapter === chapter && current && verse) {
+    if (nextBook === book && targetChapter === chapter && current && verse) {
       const match = current.verses.find((v) => v.verse <= verse && (v.endVerse ?? v.verse) >= verse)
       pendingVerse.current = null
       if (match) {
@@ -275,7 +282,7 @@ export default function BibleReader() {
         articleRef.current?.querySelector(`[data-verse="${match.verse}"]`)?.scrollIntoView({ block: 'center' })
       }
     } else {
-      setPosition((p) => ({ ...p, book: nextBook, chapter: nextChapter }))
+      setPosition((p) => ({ ...p, book: nextBook, chapter: targetChapter }))
       window.scrollTo({ top: 0 })
     }
   }
@@ -367,6 +374,11 @@ export default function BibleReader() {
     const next = tapVerse({ anchor, verses: selected }, verse)
     setAnchor(next.anchor)
     setSelected(next.verses)
+    // Clearing via the anchor unmounts the sheet; hand focus to the verse that
+    // was just tapped so keyboard users stay in the passage, not on <body>.
+    if (!next.anchor && selected.size > 0) {
+      requestAnimationFrame(() => articleRef.current?.querySelector(`[data-verse="${verse}"]`)?.focus({ preventScroll: true }))
+    }
   }
   // Sharing moved into the verse card sheet, which offers the image and keeps
   // a text option of its own. This is now only the clipboard.
@@ -386,14 +398,21 @@ export default function BibleReader() {
   const hasHighlight = useMemo(() => selectedRows.some(
     (v) => isHighlightColor(highlights[v.verse])
   ), [selectedRows, highlights])
+  // Canonical verse count: bridged rows (verse.endVerse) cover more than one
+  // canonical verse, so the chip and live region count verses, not rows.
+  const selectedCount = useMemo(() => selectedRows.reduce(
+    (n, v) => n + ((v.endVerse ?? v.verse) - v.verse + 1), 0
+  ), [selectedRows])
   function handleToggleSave() {
     if (!selectedRows.length) return
     const target = !allSaved
-    for (const v of selectedRows) {
-      if (savedVerses.isSaved(book, chapter, v.verse) !== target) savedVerses.toggle(book, chapter, v.verse)
-    }
+    savedVerses.setAll(book, chapter, selectedRows.map((v) => v.verse), target)
     setSavedTick((n) => n + 1)
-    toast.success(target ? 'Saved for later.' : 'Removed from saved verses.')
+    // Storage can refuse the write (private mode, quota); verify against the
+    // store so the toast never claims a save that did not persist.
+    const confirmed = selectedRows.every((v) => savedVerses.isSaved(book, chapter, v.verse) === target)
+    if (confirmed) toast.success(target ? 'Saved for later.' : 'Removed from saved verses.')
+    else toast.error(target ? 'Could not save — your browser blocked storage.' : 'Could not remove — your browser blocked storage.')
   }
   function openSaved() {
     setSavedGroups(savedVerses.list())
@@ -408,7 +427,7 @@ export default function BibleReader() {
   return <div className="bible-reader pb-28">
     {/* Announced to screen readers when the passage location changes. */}
     <p className="sr-only" role="status" aria-live="polite">{book} {chapter}, {version.name}</p>
-    <p className="sr-only" role="status" aria-live="polite">{selection ? `${selection.reference} selected${selectedRows.length > 1 ? `, ${selectedRows.length} verses` : ''}` : ''}</p>
+    <p className="sr-only" role="status" aria-live="polite">{selection ? `${selection.reference} selected${selectedCount > 1 ? `, ${selectedCount} verses` : ''}` : ''}</p>
     <div className="mb-5 flex items-center justify-between">
       <div><p className="eyebrow">The living Word</p><h1 className="mt-1 text-2xl">Bible</h1></div>
       <div className="flex gap-1">
@@ -468,7 +487,7 @@ export default function BibleReader() {
     {selection && !loading && !error && <VerseActions
       reference={selection.reference}
       translation={version.abbreviation}
-      count={selectedRows.length}
+      count={selectedCount}
       verses={selectedRows}
       highlights={highlights}
       allSaved={allSaved}

@@ -80,6 +80,12 @@ export const ChevronDownIcon = (props) => (
   </svg>
 )
 
+export const ChevronUpIcon = (props) => (
+  <svg {...ICON_PROPS} {...props}>
+    <path d="M6 15l6-6 6 6" />
+  </svg>
+)
+
 export const MinusIcon = (props) => (
   <svg {...ICON_PROPS} {...props}>
     <path d="M5 12h14" />

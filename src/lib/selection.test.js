@@ -71,3 +71,37 @@ test('non-finite, zero, or fractional verse numbers are rejected as empty select
     assert.deepEqual([...after.verses].sort((a, b) => a - b), [16, 17, 18])
   }
 })
+
+test('huge finite or unsafe verse numbers never reach span()', () => {
+  // Canonical chapters max out at 176 verses (Psalm 119); large-but-finite
+  // values must be no-ops so a hostile caller cannot allocate an enormous set.
+  const range = tapVerse(tapVerse(emptySelection(), 16), 18)
+  for (const huge of [1001, 1_000_000, 1e9, 1e12, Number.MAX_SAFE_INTEGER]) {
+    const next = tapVerse(range, huge)
+    assert.equal(next.anchor, 16, `anchor for ${huge}`)
+    assert.deepEqual([...next.verses].sort((a, b) => a - b), [16, 17, 18], `verses for ${huge}`)
+  }
+  assert.equal(tapVerse(emptySelection(), 1_000_000).verses.size, 0)
+})
+
+test('a malformed stored anchor recovers to a fresh selection on the tapped verse', () => {
+  for (const corrupt of [
+    { anchor: Infinity, verses: new Set([Infinity]) },
+    { anchor: 1_000_000, verses: new Set([1_000_000]) },
+    { anchor: -5, verses: new Set([-5]) },
+  ]) {
+    const next = tapVerse(corrupt, 16)
+    assert.equal(next.anchor, 16, `anchor for ${corrupt.anchor}`)
+    assert.deepEqual([...next.verses], [16])
+  }
+})
+
+test('a requested range is capped so span() allocation stays bounded', () => {
+  // Exactly at the cap still works…
+  const atCap = tapVerse(tapVerse(emptySelection(), 1), 300)
+  assert.equal(atCap.verses.size, 300)
+  // …but one past it leaves the existing selection untouched.
+  const over = tapVerse(tapVerse(emptySelection(), 1), 301)
+  assert.equal(over.anchor, 1)
+  assert.deepEqual([...over.verses], [1])
+})

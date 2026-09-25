@@ -42,6 +42,9 @@ backend/bridge/opencode-bridge/devotional-output.json
 # graphify-out/ is a regenerable knowledge-graph dump.
 graphify-out/
 
+# Per-run feature pipeline handoffs
+.pipeline/*.md
+
 # OS and tooling noise
 .DS_Store
 deno.lock

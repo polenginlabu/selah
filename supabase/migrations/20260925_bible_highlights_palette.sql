@@ -8,9 +8,14 @@
 -- is already applied. The trigger itself (bible_highlights_validate_verses)
 -- references the function by name and keeps working after the replace.
 --
--- The full original body is preserved — entry cap and all — with only the
--- color whitelist extended, so old four-color data is untouched and the
--- server-side defenses stay intact.
+-- The full original body is preserved — entry cap and all — with the color
+-- whitelist extended, and two hardening tweaks applied to the new body:
+--   * jsonb_each_text() yields SQL NULL for a JSON null value, and `NULL NOT
+--     IN (...)` is NULL, so `{"1": null}` previously skipped the color check;
+--     the value is now rejected explicitly.
+--   * key lengths are bounded to 1..4 digits so a hostile client cannot push
+--     unbounded-size keys past the 300-entry cap.
+-- Old four-color data is untouched and remains valid.
 
 create or replace function public.validate_bible_highlights_verses()
 returns trigger
@@ -28,10 +33,10 @@ begin
     if n > 300 then
       raise exception 'bible_highlights.verses has more than 300 entries';
     end if;
-    if entry.key !~ '^(0|[1-9][0-9]*)$' then
-      raise exception 'bible_highlights.verses key is not a verse number: %', entry.key;
+    if entry.key !~ '^(0|[1-9][0-9]{0,3})$' then
+      raise exception 'bible_highlights.verses key is not a bounded verse number: %', entry.key;
     end if;
-    if entry.value not in ('yellow', 'pink', 'green', 'blue', 'purple', 'orange') then
+    if entry.value is null or entry.value not in ('yellow', 'pink', 'green', 'blue', 'purple', 'orange') then
       raise exception 'bible_highlights.verses has an invalid highlight color: %', entry.value;
     end if;
   end loop;

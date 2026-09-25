@@ -12,7 +12,13 @@
 // the real localStorage when one exists.
 
 const STORAGE_KEY = 'bible:savedVerses'
-const KEY_RE = /^[^|]+\|\d+\|\d+$/
+// Canonical key shape: a book name (never a pipe or control character — app
+// book names are letters, spaces and digits like "1 John"), then 1..4-digit
+// chapter and verse with no leading zeros. Anything else — control characters,
+// leading zeros, or digit strings long enough to parse as Infinity — is pruned
+// on read so hostile or stale storage can neither render junk nor break
+// navigation.
+const KEY_RE = /^[^|\u0000-\u001f]{1,48}\|[1-9][0-9]{0,3}\|[1-9][0-9]{0,3}$/
 
 function verseKey(book, chapter, verse) {
   return `${book}|${chapter}|${verse}`
@@ -23,9 +29,9 @@ export function createSavedVersesStore(storage) {
     try {
       const raw = JSON.parse(storage?.getItem(STORAGE_KEY) ?? '[]')
       if (!Array.isArray(raw)) return []
-      // Prune anything that is not a well-formed key so a corrupt or hostile
-      // entry can never surface in the saved-verses sheet.
-      return raw.filter((k) => typeof k === 'string' && KEY_RE.test(k))
+      // Prune anything that is not a well-formed canonical key, then dedupe so
+      // a corrupted store can never surface duplicate chips in the sheet.
+      return [...new Set(raw.filter((k) => typeof k === 'string' && KEY_RE.test(k)))]
     } catch {
       return []
     }
@@ -34,8 +40,9 @@ export function createSavedVersesStore(storage) {
   function writeKeys(keys) {
     try {
       storage?.setItem(STORAGE_KEY, JSON.stringify(keys))
+      return true
     } catch {
-      /* Best-effort, same as highlights: reading works without storage. */
+      return false
     }
   }
 
@@ -44,7 +51,9 @@ export function createSavedVersesStore(storage) {
       return readKeys().includes(verseKey(book, chapter, verse))
     },
 
-    /** Adds or removes the verse; returns true when it is now saved. */
+    /** Adds or removes the verse; returns true when it is now saved.
+     *  Persistence is best-effort (blocked/quota storage silently refuses) —
+     *  callers that surface success should re-read via isSaved() to confirm. */
     toggle(book, chapter, verse) {
       const key = verseKey(book, chapter, verse)
       const keys = readKeys()
@@ -60,6 +69,20 @@ export function createSavedVersesStore(storage) {
         : rest.concat(chapterKeys.filter((k) => k !== key), key)
       writeKeys(next)
       return !exists
+    },
+
+    /** Saves or removes a whole selection in a single read-modify-write.
+     *  Returns the write outcome (true when storage accepted it). */
+    setAll(book, chapter, verses, target) {
+      const keys = readKeys()
+      const prefix = `${book}|${chapter}|`
+      const rest = keys.filter((k) => !k.startsWith(prefix))
+      const chapterKeys = keys.filter((k) => k.startsWith(prefix))
+      const wanted = new Set(verses.map((v) => verseKey(book, chapter, v)))
+      const next = target
+        ? rest.concat([...new Set([...chapterKeys, ...wanted])])
+        : rest.concat(chapterKeys.filter((k) => !wanted.has(k)))
+      return writeKeys(next)
     },
 
     /** Saved verses grouped by book:chapter, newest saved first. */

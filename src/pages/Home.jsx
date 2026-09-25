@@ -12,6 +12,7 @@ import { currentStreak, formatDateLong, formatDateShort, formatMonthYear, lastND
 import { getLevelProgress, getTribeForLevel } from '../lib/gamification'
 import { CheckIcon, ChevronDownIcon, PlusIcon, SearchIcon, SunIcon, XIcon, BookIcon, SproutIcon, BellIcon } from '../icons'
 import { TRIBE_ICONS } from '../tribeIcons'
+import { PrayerHomeEntry } from '../components/PrayerHomeEntry'
 
 const PAGE_SIZE = 20
 const LOAD_MORE_INCREMENT = 100
@@ -177,6 +178,8 @@ export function Home() {
       {SHOW_VERSE_OF_THE_DAY && verse && <VerseOfTheDayCard verse={verse} doneToday={doneToday} />}
 
       {user && <MeditateCard uid={user.id} />}
+
+      {user && <PrayerHomeEntry />}
 
       {lastYearEntry && !isFiltering && (
         <Link

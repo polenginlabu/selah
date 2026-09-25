@@ -10,6 +10,8 @@
 .bible-reader button:focus-visible,
 .bible-sheet button:focus-visible,
 .bible-sheet input:focus-visible,
+.confirm-dialog button:focus-visible,
+.confirm-dialog input:focus-visible,
 .verse-actions button:focus-visible,
 .bible-verse:focus-visible {
   outline: 2px solid oklch(var(--brand));
@@ -31,6 +33,21 @@
 }
 .bible-sheet[open] { display: flex; flex-direction: column; }
 .bible-sheet::backdrop { background: rgb(0 0 0 / 0.45); }
+/* Full-viewport confirm layer: transparent dialog, dimming handled by
+   ::backdrop, content centered by the inner flex. Sits in the top layer, so
+   it always stacks above any open sheet. */
+.confirm-dialog {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  width: 100vw;
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+}
+.confirm-dialog[open] { display: flex; }
+.confirm-dialog::backdrop { background: rgb(0 0 0 / 0.45); }
 /* touch-action: pan-y keeps vertical scrolling and pinch-zoom native while
    horizontal swipes are handed to the reader's gesture handler (chapter nav). */
 .bible-passage { line-height: 1.95; overflow-wrap: break-word; touch-action: pan-y pinch-zoom; }

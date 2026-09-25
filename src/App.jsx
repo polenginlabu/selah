@@ -20,6 +20,7 @@ const Attendance = lazy(() => import('./pages/Attendance'))
 const Reports = lazy(() => import('./pages/Reports'))
 const Admin = lazy(() => import('./pages/Admin'))
 const Goals = lazy(() => import('./pages/Goals'))
+const Prayer = lazy(() => import('./pages/Prayer'))
 // Two named exports from one module. Both resolve the same chunk, so it is
 // fetched once — lazy() needs a component as `default`, and a lazy component
 // has no properties to reach into.
@@ -77,6 +78,7 @@ function AuthedApp() {
         <Route path="attendance" element={withSuspense(<Attendance />)} />
         <Route path="attendance/reports" element={withSuspense(<Reports />)} />
         <Route path="goals" element={withSuspense(<Goals />)} />
+        <Route path="prayer" element={withSuspense(<Prayer />)} />
         <Route path="leaderboard" element={withSuspense(<Leaderboard />)} />
         {/* Admin itself redirects non-admins; the RPCs it calls enforce this in Postgres. */}
         <Route path="admin" element={withSuspense(<Admin />)} />

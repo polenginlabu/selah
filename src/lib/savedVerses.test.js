@@ -91,3 +91,48 @@ test('toggling a saved verse never leaves duplicate keys', () => {
   assert.deepEqual(raw.filter((k) => k === 'John|3|16'), ['John|3|16'])
   assert.deepEqual(store.list(), [{ book: 'John', chapter: 3, verses: [16] }])
 })
+
+test('non-canonical or hostile keys are pruned and duplicates deduped on read', () => {
+  // Malformed shapes (control chars, leading zeros, unbounded digits, missing
+  // fields, non-strings) are pruned and duplicate canonical keys collapse to
+  // one. The lib is storage-generic and does not know canonical book names, so
+  // shape-*valid* keys with unknown books still render here — refusing those
+  // is the navigation layer's job (reader goTo() validates against the books
+  // list), which keeps savedVerses decoupled from domain data.
+  const store = createSavedVersesStore(memoryStorage({
+    'bible:savedVerses': JSON.stringify([
+      'John|3|16', 'John|3|16', 'John|03|16', 'John|3|99999999',
+      '__proto__|1|1', 'NotABook|1|1', 'John|\u0001|1', 'John|3|16|extra', 'evil key', 42, null,
+    ]),
+  }))
+  assert.deepEqual(store.list(), [
+    { book: 'NotABook', chapter: 1, verses: [1] },
+    { book: '__proto__', chapter: 1, verses: [1] },
+    { book: 'John', chapter: 3, verses: [16] },
+  ])
+  assert.ok(store.isSaved('John', 3, 16))
+  assert.ok(!store.isSaved('John', 3, 99999999))
+})
+
+test('setAll saves and removes a whole selection in one write, newest chapter first', () => {
+  const storage = memoryStorage()
+  const store = createSavedVersesStore(storage)
+  assert.equal(store.setAll('John', 3, [16, 17, 18], true), true)
+  assert.deepEqual(store.list(), [{ book: 'John', chapter: 3, verses: [16, 17, 18] }])
+  store.toggle('Psalms', 119, 105)
+  // Re-saving a subset of John 3 moves the whole chapter back to newest…
+  store.setAll('John', 3, [16, 18], true)
+  assert.deepEqual(store.list(), [
+    { book: 'John', chapter: 3, verses: [16, 17, 18] },
+    { book: 'Psalms', chapter: 119, verses: [105] },
+  ])
+  // …and removing some verses keeps the chapter order but drops only those.
+  store.setAll('John', 3, [16, 17], false)
+  assert.deepEqual(store.list(), [
+    { book: 'John', chapter: 3, verses: [18] },
+    { book: 'Psalms', chapter: 119, verses: [105] },
+  ])
+  // No duplicate keys are ever written.
+  const raw = JSON.parse(storage.getItem('bible:savedVerses'))
+  assert.equal(new Set(raw).size, raw.length)
+})
