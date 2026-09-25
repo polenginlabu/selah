@@ -28,6 +28,17 @@ export function ConfirmDialog({
   const [typed, setTyped] = useState('')
   const ready = !confirmPhrase || typed.trim() === confirmPhrase
   const ref = useRef(null)
+  const [height, setHeight] = useState(null)
+
+  useEffect(() => {
+    // Keep the card above the on-screen keyboard on phones (see PrayerSheet).
+    const vv = window.visualViewport
+    if (!vv) return
+    const update = () => setHeight(`${Math.round(vv.height)}px`)
+    update()
+    vv.addEventListener('resize', update)
+    return () => vv.removeEventListener('resize', update)
+  }, [])
 
   useEffect(() => {
     const dialog = ref.current
@@ -45,6 +56,7 @@ export function ConfirmDialog({
       ref={ref}
       className="confirm-dialog"
       aria-label={title}
+      style={height ? { height } : undefined}
       onCancel={onCancel}
       onClick={(e) => {
         if (busy) return

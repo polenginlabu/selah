@@ -368,7 +368,7 @@ function CategoryEditor({ initial, onClose, onSave }) {
             }}
             className="btn-primary flex-1"
           >
-            {busy ? 'Saving…' : initial ? 'Save' : 'Create'}
+            {busy ? 'Saving…' : initial?.id ? 'Save' : 'Create'}
           </button>
         </div>
       </div>

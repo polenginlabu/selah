@@ -23,6 +23,9 @@
   margin: 0 auto;
   width: 100%;
   max-width: 36rem;
+  /* vh fallback for older mobile browsers that don't know dvh (their sheet
+     would otherwise grow past the screen with no way to scroll). */
+  max-height: 88vh;
   max-height: 88dvh;
   padding: 0;
   border: 1px solid oklch(var(--line));
@@ -43,6 +46,7 @@
   background: transparent;
   width: 100vw;
   max-width: none;
+  height: 100vh;
   height: 100dvh;
   max-height: none;
 }

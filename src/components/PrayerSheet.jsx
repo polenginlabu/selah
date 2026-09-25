@@ -2,12 +2,45 @@
 // the way BibleReaderSheet is: the browser supplies focus trapping, Escape,
 // and an inert background for free. Same `.bible-sheet` styling class (it is
 // just the app's bottom-sheet look).
-import { useEffect, useRef } from 'react'
+//
+// The sheet is bottom-anchored, so on phones the on-screen keyboard would
+// sit on top of its actions: the visual viewport shrinks when the keyboard
+// opens (iOS and Android), and we re-anchor the sheet to the visible bottom
+// and cap its height so fields and buttons stay reachable. Browsers without
+// a visual viewport fall back to the CSS class, which carries a vh → dvh
+// fallback chain.
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { XIcon } from '../icons'
 
 export function PrayerSheet({ title, onClose, children }) {
   const ref = useRef(null)
+  const [sheetStyle, setSheetStyle] = useState(null)
+
+  useEffect(() => {
+    const vv = window.visualViewport
+    if (!vv) return
+    const update = () => {
+      const layoutH = window.innerHeight
+      const vh = vv.height
+      // Layout region hidden below the visible area (i.e. the on-screen
+      // keyboard, including any visual-viewport pan from focusing a field).
+      const keyboard = Math.max(0, layoutH - vh - (vv.offsetTop || 0))
+      setSheetStyle({
+        maxHeight: `${Math.round(vh * 0.88)}px`,
+        bottom: `${Math.round(keyboard)}px`,
+      })
+    }
+    update()
+    vv.addEventListener('resize', update)
+    vv.addEventListener('scroll', update)
+    window.addEventListener('resize', update)
+    return () => {
+      vv.removeEventListener('resize', update)
+      vv.removeEventListener('scroll', update)
+      window.removeEventListener('resize', update)
+    }
+  }, [])
 
   useEffect(() => {
     const dialog = ref.current
@@ -25,6 +58,7 @@ export function PrayerSheet({ title, onClose, children }) {
       ref={ref}
       className="bible-sheet"
       aria-label={title}
+      style={sheetStyle || undefined}
       onCancel={onClose}
       onClick={(e) => {
         if (e.target === ref.current) onClose()
