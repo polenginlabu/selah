@@ -7,11 +7,11 @@
 // timezone falls on an eligible slot (hourly, or the four fixed 4-hourly
 // slots), and if so pushes their word to every device they've registered.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { shouldClaimSlot, windowStartIso } from './slot.ts'
 
 const QUIET_START_HOUR = 7
 const QUIET_END_HOUR = 21 // exclusive; last 4-hourly slot is 19 so it still fires before this
 const FOUR_HOURLY_SLOTS = [7, 11, 15, 19]
-const MIN_RESEND_GAP_MS = 55 * 60 * 1000 // guards against a cron double-fire within the same hour
 
 function base64UrlEncode(bytes) {
   let binary = ''
@@ -124,7 +124,9 @@ Deno.serve(async () => {
           : FOUR_HOURLY_SLOTS
       if (!eligibleHours.includes(localHour)) continue
 
-      if (row.last_sent_at && now.getTime() - new Date(row.last_sent_at).getTime() < MIN_RESEND_GAP_MS) continue
+      // Cheap pre-check from this invocation's snapshot. The DB claim below is
+      // authoritative, so this only avoids a pointless UPDATE round-trip.
+      if (!shouldClaimSlot(row.last_sent_at, now.getTime())) continue
 
       const { data: tokens } = await supabase.from('device_tokens').select('token').eq('user_id', row.user_id)
       if (!tokens?.length) continue
@@ -132,16 +134,24 @@ Deno.serve(async () => {
       const uniqueTokens = [...new Set(tokens.map((t) => t.token))]
       accessToken ??= await getFirebaseAccessToken(serviceAccount)
 
-      let anySent = false
-      for (const token of uniqueTokens) {
-        const ok = await sendPush(accessToken, serviceAccount.project_id, token, 'Meditate on this', row.focus_word)
-        anySent ||= ok
-      }
+      // Atomically claim the send slot for this user. Concurrent invocations
+      // (e.g. a duplicated pg_cron job firing the same minute) both pass the
+      // pre-check above, but only ONE can win the UPDATE — the WHERE clause is
+      // evaluated against current rows, so the loser sees count 0 and skips.
+      // Claim-before-send means a total FCM failure still consumes the window
+      // (miss over double); the next eligible slot retries.
+      const { count, error: claimError } = await supabase
+        .from('meditation_settings')
+        .update({ last_sent_at: now.toISOString() }, { count: 'exact' })
+        .eq('user_id', row.user_id)
+        .or(`last_sent_at.is.null,last_sent_at.lt."${windowStartIso(now.getTime())}"`)
+      if (claimError) throw claimError
+      if (count !== 1) continue // another invocation already claimed this window
 
-      if (anySent) {
-        sent++
-        await supabase.from('meditation_settings').update({ last_sent_at: now.toISOString() }).eq('user_id', row.user_id)
+      for (const token of uniqueTokens) {
+        await sendPush(accessToken, serviceAccount.project_id, token, 'Meditate on this', row.focus_word)
       }
+      sent++
     }
 
     return Response.json({ sent })

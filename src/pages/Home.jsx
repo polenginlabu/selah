@@ -5,12 +5,14 @@ import { useToast } from '../context/ToastContext'
 import { subscribeToUserStats } from '../data/userStats'
 import { DEVOTION_METHOD_LABELS, getDevotionMeta, getDevotionsByDate, subscribeToDevotions } from '../data/devotions'
 import { getTodayDevotion } from '../data/dailyDevotion'
+import { getPlans, getMyProgress } from '../data/devotionPlans'
 import { getVerseOfTheDay } from '../data/votd'
 import { getMeditationSettings, setMeditationFocusWord, setMeditationPreferences } from '../data/meditation'
 import { enableNotifications } from '../lib/firebase'
 import { currentStreak, formatDateLong, formatDateShort, formatMonthYear, lastNDays, todayISO, weekdayLetter } from '../lib/date'
 import { getLevelProgress, getTribeForLevel } from '../lib/gamification'
-import { CheckIcon, ChevronDownIcon, PlusIcon, SearchIcon, SunIcon, XIcon, BookIcon, SproutIcon, BellIcon } from '../icons'
+import { currentDayIndex, isPlanFinished } from '../lib/devotionPlans'
+import { CheckIcon, ChevronDownIcon, PlusIcon, SearchIcon, SunIcon, XIcon, BookIcon, SproutIcon, BellIcon, CalendarIcon } from '../icons'
 import { TRIBE_ICONS } from '../tribeIcons'
 import { PrayerHomeEntry } from '../components/PrayerHomeEntry'
 
@@ -178,6 +180,8 @@ export function Home() {
       {SHOW_VERSE_OF_THE_DAY && verse && <VerseOfTheDayCard verse={verse} doneToday={doneToday} />}
 
       {user && <MeditateCard uid={user.id} />}
+
+      {user && <PlansHomeEntry />}
 
       {user && <PrayerHomeEntry />}
 
@@ -560,6 +564,60 @@ function MeditateCard({ uid }) {
         </>
       )}
     </section>
+  )
+}
+
+/**
+ * Home entry into the devotional plans. Quiet like PrayerHomeEntry: when the
+ * user has progress it names their active plan and day; otherwise it invites
+ * them in. Failures fall back to the teaser copy, never an error on the feed.
+ */
+function PlansHomeEntry() {
+  const { user } = useAuth()
+  const [subtitle, setSubtitle] = useState('Follow a themed 7-day plan.')
+
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        const catalog = await getPlans()
+        const rows = await Promise.all(catalog.map((p) => getMyProgress(user.id, p.id)))
+        if (!alive) return
+        const started = catalog
+          .map((plan, i) => ({ plan, completed: rows[i]?.completedDays ?? [] }))
+          .filter((entry) => entry.completed.length > 0)
+        if (started.length === 0) {
+          setSubtitle('Follow a themed 7-day plan.')
+          return
+        }
+        const active = started.find((e) => !isPlanFinished(e.completed, e.plan.dayCount)) ?? started[0]
+        setSubtitle(
+          isPlanFinished(active.completed, active.plan.dayCount)
+            ? `${active.plan.title} — complete. Start another.`
+            : `${active.plan.title} — Day ${currentDayIndex(active.completed, active.plan.dayCount)} of ${active.plan.dayCount}`
+        )
+      } catch (err) {
+        console.error('Failed to load plan progress for the home card:', err)
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [user.id])
+
+  return (
+    <Link
+      to="/plans"
+      className="flex items-center gap-3 rounded-xl bg-brand-wash px-4 py-3 text-sm text-ink transition-colors hover:bg-brand-wash/70"
+    >
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand/10 text-brand-strong dark:text-brand">
+        <CalendarIcon width={16} height={16} />
+      </span>
+      <span className="min-w-0">
+        <span className="block font-semibold text-brand-strong dark:text-brand">Devotional plans</span>
+        <span className="block truncate text-muted">{subtitle}</span>
+      </span>
+    </Link>
   )
 }
 
