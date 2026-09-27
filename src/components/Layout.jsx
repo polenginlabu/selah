@@ -313,14 +313,19 @@ function NotificationSettings({ uid, email }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [testStatus, setTestStatus] = useState(null)
+  const [installHint, setInstallHint] = useState(false)
 
   if (permission === 'unsupported') return null
 
   const toggle = (action, fallback) => {
     setBusy(true)
     setError(null)
+    setInstallHint(false)
     action()
-      .then((result) => setPermission(result ?? fallback))
+      .then((result) => {
+        if (result === 'ios-install-required') setInstallHint(true)
+        else setPermission(result ?? fallback)
+      })
       .catch((err) => {
         console.error('notification toggle failed', err)
         setError('Something went wrong — try again.')
@@ -368,6 +373,12 @@ function NotificationSettings({ uid, email }) {
         </button>
       )}
       {error && <p className="mt-1.5 text-xs text-red-500">{error}</p>}
+      {installHint && (
+        <p className="mt-1.5 text-xs text-muted">
+          Reminders on iPhone/iPad come from the installed app — share the site,
+          then tap “Add to Home Screen”, and enable reminders from there.
+        </p>
+      )}
       {permission === 'granted' && isAdminEmail(email) && (
         <>
           <button

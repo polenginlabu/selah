@@ -119,10 +119,20 @@ firebase.initializeApp({
 firebase.messaging().onBackgroundMessage((payload) => {
   const { title, body } = payload.notification ?? {}
   if (!title) return
-  self.registration.showNotification(title, {
-    body,
-    icon: '/icon-192.png',
-    badge: '/favicon-32.png',
+
+  // Foreground banners are the page's job (Layout.jsx onMessage). The compat
+  // SDK suppresses the SW path when a window is focused on most platforms,
+  // but iOS PWAs can deliver the same push to BOTH the SW and the open page —
+  // double banner. Explicitly skip here when a window is visible, so the
+  // foreground and background paths stay mutually exclusive on every platform.
+  return self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+    const visible = clients.some((c) => c.visibilityState === 'visible' && 'focus' in c)
+    if (visible) return
+    self.registration.showNotification(title, {
+      body,
+      icon: '/icon-192.png',
+      badge: '/favicon-32.png',
+    })
   })
 })
 

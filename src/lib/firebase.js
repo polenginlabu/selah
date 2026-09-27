@@ -15,17 +15,45 @@ const VAPID_KEY =
 // The worker moved: caching and FCM now live in one file, because only one
 // worker can own scope "/". See lib/serviceWorker.js.
 import { getServiceWorkerRegistration } from './serviceWorker'
+import { isIos, isStandalone } from './pwaInstall'
 
 const firebaseApp = initializeApp(firebaseConfig)
 const messagingPromise = isSupported().then((supported) =>
   supported ? getMessaging(firebaseApp) : null
 )
 
+// Stable per-install identity. iOS Safari reissues FCM tokens on OS/app
+// updates and site-data clears; without a device id the rotated token lands
+// as an extra device_tokens row and every reminder pushes twice to the same
+// device ("double alert"). Each install context (PWA, browser profile) gets
+// its own id, so enableNotifications() can retire that context's old token
+// instead of piling up a second one.
+const DEVICE_ID_KEY = 'selah-device-id'
+function getDeviceId() {
+  try {
+    let id = localStorage.getItem(DEVICE_ID_KEY)
+    if (!id) {
+      id =
+        globalThis.crypto?.randomUUID?.() ??
+        `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+      localStorage.setItem(DEVICE_ID_KEY, id)
+    }
+    return id
+  } catch {
+    return null // storage unavailable (private mode): register without device id
+  }
+}
+
 export async function enableNotifications(userId) {
   const messaging = await messagingPromise
   if (!messaging || typeof Notification === 'undefined' || !('serviceWorker' in navigator)) {
     return 'unsupported'
   }
+  // iOS web push only works from the installed Home Screen app. Registering
+  // from a Safari tab would add a second token for this device that can never
+  // receive a push (double alerts) — block before the permission prompt so
+  // nobody is asked to grant something useless.
+  if (isIos() && !isStandalone()) return 'ios-install-required'
   const permission = await Notification.requestPermission()
   if (permission !== 'granted') return permission === 'denied' ? 'denied' : 'unsupported'
 
@@ -41,8 +69,25 @@ export async function enableNotifications(userId) {
   if (!token) return 'unsupported'
 
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
-  await supabase.from('device_tokens').upsert({ token, user_id: userId }, { onConflict: 'token' })
-  await supabase.from('notification_profiles').upsert({ user_id: userId, timezone }, { onConflict: 'user_id' })
+
+  // One live token per install context: retire this context's previous token
+  // (if any) before upserting, so a Safari-reissued token replaces the old
+  // one instead of joining it as a second push target for the same device.
+  const deviceId = getDeviceId()
+  if (deviceId) {
+    await supabase
+      .from('device_tokens')
+      .delete()
+      .eq('user_id', userId)
+      .eq('device_id', deviceId)
+      .neq('token', token)
+  }
+  await supabase
+    .from('device_tokens')
+    .upsert({ token, user_id: userId, device_id: deviceId }, { onConflict: 'token' })
+  await supabase
+    .from('notification_profiles')
+    .upsert({ user_id: userId, timezone }, { onConflict: 'user_id' })
   return 'granted'
 }
 

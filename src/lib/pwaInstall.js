@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 
-function isStandalone() {
+export function isStandalone() {
   return (
     window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true
   )
 }
 
-function isIos() {
+export function isIos() {
   return /iphone|ipad|ipod/i.test(window.navigator.userAgent) && !window.MSStream
 }
 
