@@ -8,7 +8,6 @@ import { usePwaInstall } from '../lib/pwaInstall'
 import {
   BellIcon,
   BookOpenIcon,
-  CalendarIcon,
   ChatIcon,
   DownloadIcon,
   FlagIcon,
@@ -124,7 +123,6 @@ export function Layout() {
             <NavItem to="/disciple" icon={<SproutIcon width={20} height={20} />} label="Discipleship" />
             <NavItem to="/conquest" icon={<FlagIcon width={20} height={20} />} label="Conquest" />
             <NavItem to="/achievements" icon={<TrophyIcon width={20} height={20} />} label="Growth" />
-            <NavItem to="/plans" icon={<CalendarIcon width={20} height={20} />} label="Plans" />
           </div>
         </nav>
       </div>
