@@ -19,6 +19,7 @@ import { useToast } from '../context/ToastContext'
 import { CalendarIcon, CheckIcon, ChevronDownIcon, RefreshIcon } from '../icons'
 import { isAdminEmail } from '../data/admin'
 import {
+  getDevotionForDate,
   getDevotionSettings,
   saveDevotionSettings,
   triggerDevotionRun,
@@ -149,7 +150,13 @@ export default function DevotionPlans() {
       const previous = settings.theme
       await saveDevotionSettings({ theme })
       try {
-        await triggerDevotionRun({ date: todayISO() })
+        // The Generate button only appears when the fallback is today's
+        // devotion, so the date is usually occupied. Dispatch with force
+        // exactly when the row exists — the explicit click is the consent to
+        // replace it — and leave the generator's no-force idempotency alone
+        // when the date is empty (mirrors Admin.jsx DevotionPanel).
+        const existing = await getDevotionForDate(todayISO())
+        await triggerDevotionRun({ date: todayISO(), force: Boolean(existing) })
         await waitForDevotion(todayISO())
       } finally {
         await saveDevotionSettings({ theme: previous }).catch(() => {
