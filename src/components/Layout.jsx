@@ -60,12 +60,20 @@ export function Layout() {
 
   return (
     <div className="mx-auto flex min-h-screen max-w-xl flex-col">
-      {/* No backdrop-blur here either: on iPadOS Safari backdrop-filter does
-          not reliably hold on the sticky top bar, so scrolling text bleeds
-          through its translucent background — the same failure the bottom nav
-          documents below. The near-opaque canvas wash keeps the look without
-          the blur. */}
-      <header className="sticky top-0 z-sticky border-b border-line/70 bg-canvas/95">
+      {/* Opaque (no backdrop-blur): on iPadOS Safari backdrop-filter does not
+          reliably hold on the sticky top bar, so scrolling text bleeds through
+          a translucent background — the same failure the bottom nav documents
+          below. The near-opaque canvas wash keeps the look without the blur.
+
+          The paddingTop below is the iOS safe-area inset for the status bar
+          (time/signal/battery). Together with viewport-fit=cover in
+          index.html it makes the header background span from the physical top
+          edge, so the bar visually joins the status bar and scrolled content
+          can never show in the strip above the app. */}
+      <header
+        className="sticky top-0 z-sticky border-b border-line/70 bg-canvas/95"
+        style={{ paddingTop: 'env(safe-area-inset-top)' }}
+      >
         <div className="flex items-center justify-between gap-2 px-4 py-3">
           <Link to="/" className="group flex items-center gap-2">
             <Logo size={26} />

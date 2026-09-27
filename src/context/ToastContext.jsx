@@ -47,7 +47,8 @@ export function ToastProvider({ children }) {
       {children}
       <div
         aria-live="polite"
-        className="pointer-events-none fixed inset-x-0 top-4 z-toast mx-auto flex max-w-sm flex-col items-stretch gap-2 px-4"
+        className="pointer-events-none fixed inset-x-0 z-toast mx-auto flex max-w-sm flex-col items-stretch gap-2 px-4"
+        style={{ top: 'max(1rem, env(safe-area-inset-top))' }}
       >
         {toasts.map((item) => {
           const { icon: Icon, iconClass } = VARIANTS[item.variant]
