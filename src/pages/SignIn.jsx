@@ -79,7 +79,7 @@ export function SignIn() {
   }
 
   return (
-    <div className="mx-auto min-h-screen max-w-xl px-6 pb-16">
+    <div className="mx-auto min-h-dvh max-w-xl px-6 pb-16">
       <header className="flex items-center justify-between py-5">
         <Logo size={24} />
         <a href="#about" className="text-xs font-semibold text-muted hover:text-ink">

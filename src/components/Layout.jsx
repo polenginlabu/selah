@@ -59,7 +59,7 @@ export function Layout() {
   }
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-xl flex-col">
+    <div className="mx-auto flex min-h-dvh max-w-xl flex-col">
       {/* Opaque (no backdrop-blur): on iPadOS Safari backdrop-filter does not
           reliably hold on the sticky top bar, so scrolling text bleeds through
           a translucent background — the same failure the bottom nav documents

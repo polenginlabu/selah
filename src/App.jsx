@@ -35,7 +35,7 @@ function RouteLoadingSpinner() {
 
 function SplashScreen() {
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center px-6">
+    <div className="flex min-h-dvh flex-col items-center justify-center px-6">
       <div className="h-40 w-40 overflow-hidden">
         <div style={{ transform: 'translate(-60px, -88px) scale(1.75)', transformOrigin: '0 0' }}>
           <DotLottieReact

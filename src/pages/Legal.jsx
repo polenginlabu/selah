@@ -18,7 +18,7 @@ function Section({ title, children }) {
 
 function Shell({ title, children }) {
   return (
-    <div className="mx-auto min-h-screen max-w-xl px-5 pb-16 pt-8">
+    <div className="mx-auto min-h-dvh max-w-xl px-5 pb-16 pt-8">
       <Link to="/" className="inline-block">
         <Logo size={24} />
       </Link>

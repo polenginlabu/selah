@@ -69,14 +69,14 @@ export class ErrorBoundary extends Component {
 
     if (isStaleChunkError(error)) {
       return (
-        <div className="flex min-h-screen items-center justify-center px-6">
+        <div className="flex min-h-dvh items-center justify-center px-6">
           <p className="text-sm text-muted">Updating to the latest version…</p>
         </div>
       )
     }
 
     return (
-      <div className="mx-auto flex min-h-screen max-w-sm flex-col items-center justify-center px-6 text-center">
+      <div className="mx-auto flex min-h-dvh max-w-sm flex-col items-center justify-center px-6 text-center">
         <span className="text-3xl" aria-hidden="true">
           🕊️
         </span>
