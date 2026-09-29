@@ -125,9 +125,11 @@ export function Layout() {
       <div className="fixed inset-x-0 bottom-0 z-sticky mx-auto max-w-xl">
         {/* No backdrop-blur here: on mobile Safari a fixed element with
             backdrop-filter drifts upward with the page while scrolling. The
-            near-opaque canvas wash keeps the glass look without the bug. */}
+            solid surface keeps the bar and its home-indicator chin as one
+            cohesive piece (instead of a page-colored strip reading as blank
+            space) without the blur bug. */}
         <nav
-          className="border-t border-line/70 bg-canvas/95"
+          className="border-t border-line/70 bg-surface"
           style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
         >
           <div className="flex items-stretch justify-around px-2 py-1.5">
