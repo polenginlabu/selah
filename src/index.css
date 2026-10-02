@@ -382,3 +382,12 @@ input[type='datetime-local']::-webkit-datetime-edit-fields-wrapper {
     width: auto !important;
   }
 }
+
+/* Hide the vendor "Powered by" credit. Matches only links into zackion-ai.com
+   inside the widget, plus a wrapper whose sole element child is that link (so
+   its "Powered by" text goes too). A wrapper that also holds the input or send
+   button has other children and is left alone. */
+[id^='chation-'] a[href*='zackion-ai.com'],
+[id^='chation-'] :has(> a[href*='zackion-ai.com']:only-child) {
+  display: none !important;
+}
