@@ -1,12 +1,11 @@
 // Floating action sheet for the Bible reader's verse selection.
 //
-// YouVersion-model selection: the passage stays fully interactive while the
-// sheet is open, so tapping another verse extends the selection in place (a
-// modal backdrop would swallow those taps and break range selection — there is
-// deliberately none). The sheet unmounts when the selection clears: ✕, Escape,
-// or a downward swipe all clear the selection, as does tapping the anchoring
-// verse in the passage. Focus moves into the panel on open and the reader
-// returns it to the anchor verse on close.
+// Free selection: the passage stays fully interactive while the sheet is open,
+// so tapping a verse toggles it in or out of the selection in place (a modal
+// backdrop would swallow those taps — there is deliberately none). The sheet
+// unmounts when the selection clears: ✕, Escape, or a downward swipe all clear
+// it, as does deselecting the last selected verse in the passage. Focus moves
+// into the panel on open and the reader returns it to the anchor verse on close.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {

@@ -16,7 +16,7 @@ import { getReadingPosition, saveReadingPosition } from '../data/readingPosition
 import { getStoredHighlights, saveStoredHighlights, fetchHighlights, saveHighlights } from '../data/highlights'
 import { isHighlightColor, applyColor, removeColors, hydrateHighlights } from '../lib/highlights'
 import { savedVerses } from '../lib/savedVerses'
-import { tapVerse } from '../lib/selection'
+import { tapVerse, joinSelectedText } from '../lib/selection'
 import { swipeDirection } from '../lib/swipe'
 import { useOfflineBibles } from '../lib/useOfflineBibles'
 
@@ -93,8 +93,8 @@ export default function BibleReader() {
   // copy once it arrives. hydrated gates server writes until the account rows
   // have been read, so opening a chapter never clobbers another device's rows.
   const [highlights, setHighlights] = useState(() => getStoredHighlights(book, chapter).verses)
-  // YouVersion-style selection anchor: the first verse tapped, which a later
-  // tap extends a consecutive range from (see src/lib/selection.js).
+  // Selection anchor: the most recently added verse, where focus returns when
+  // the action sheet closes (see src/lib/selection.js).
   const [anchor, setAnchor] = useState(null)
   // Saved-verses bookkeeping. savedTick forces a re-read of the localStorage
   // store when something toggles, so the sheet's "saved" state and the Saved
@@ -145,7 +145,7 @@ export default function BibleReader() {
       if (pendingVerse.current) {
         const match = data.verses.find((v) => v.verse <= pendingVerse.current && (v.endVerse ?? v.verse) >= pendingVerse.current)
         // Anchor the restored single verse so the tap model behaves as if the
-        // user tapped it: a follow-up tap extends the range, re-tapping clears,
+        // user tapped it: a follow-up tap adds that verse, re-tapping clears,
         // and closing the sheet returns focus to it.
         if (match) { setSelected(new Set([match.verse])); setAnchor(match.verse) }
       }
@@ -275,7 +275,7 @@ export default function BibleReader() {
   const selectedRows = useMemo(() => current?.verses.filter((v) => selected.has(v.verse)) ?? [], [current, selected])
   const selection = useMemo(() => selectedRows.length ? {
     reference: formatSelectionReference(book, chapter, selectedRows),
-    text: selectedRows.map((v) => v.text).join(' '), translation: current.translationName,
+    text: joinSelectedText(selectedRows), translation: current.translationName,
   } : null, [selectedRows, book, chapter, current])
   // An explanation belongs to its selection; never reopen it for the next one.
   useEffect(() => { if (!selection) setExplainOpen(false) }, [selection])
@@ -407,7 +407,7 @@ export default function BibleReader() {
     const next = tapVerse({ anchor, verses: selected }, verse)
     setAnchor(next.anchor)
     setSelected(next.verses)
-    // Clearing via the anchor unmounts the sheet; hand focus to the verse that
+    // Deselecting the last verse unmounts the sheet; hand focus to the verse that
     // was just tapped so keyboard users stay in the passage, not on <body>.
     if (!next.anchor && selected.size > 0) {
       requestAnimationFrame(() => articleRef.current?.querySelector(`[data-verse="${verse}"]`)?.focus({ preventScroll: true }))

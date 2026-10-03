@@ -30,6 +30,14 @@ test('MSG bridged verses remain one passage with the complete selection referenc
   assert.equal(formatSelectionReference('John', 3, result), 'John 3:1-4, 6')
 })
 
+test('selection reference lists non-adjacent verses and collapses contiguous runs', () => {
+  const rows = (...nums) => nums.map((verse) => ({ verse }))
+  assert.equal(formatSelectionReference('John', 3, rows(3, 10)), 'John 3:3, 10')
+  assert.equal(formatSelectionReference('John', 3, rows(3, 4, 5)), 'John 3:3-5')
+  assert.equal(formatSelectionReference('John', 3, rows(16, 17, 18, 20)), 'John 3:16-18, 20')
+  assert.equal(formatSelectionReference('John', 3, rows(16, 18)), 'John 3:16, 18')
+})
+
 test('refuses empty content rather than showing an empty chapter', () => {
   assert.throws(() => parseChapterContent([]), /No verses/)
   assert.throws(() => parseChapterContent({}), /Unexpected/)
