@@ -149,6 +149,8 @@ VITE_SUPABASE_URL=https://<project>.supabase.co
 VITE_SUPABASE_ANON_KEY=<anon key>
 VITE_ESV_API_TOKEN=<esv api token>
 VITE_NLT_API_KEY=<nlt api key>
+# Optional: verse "Explain" via Zackion AI; unset hides it.
+VITE_ZACKION_CHAT_URL=https://www.zackion-ai.com/api/chat/2c02a09f-82fa-4044-8b61-6b67b2bd44ae
 ```
 
 `.env` is gitignored. Only the Supabase **anon** key belongs here — it is safe for the browser as long as Row Level Security is enabled on every table.

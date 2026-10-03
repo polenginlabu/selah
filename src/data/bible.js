@@ -1,6 +1,8 @@
 import { supabase } from '../lib/supabase'
 import { BIBLE_BOOKS } from './books'
 import { API_BIBLES, BOOK_IDS } from '../../supabase/functions/_shared/bible.js'
+import { loadPublicBook } from './publicBibles/index.js'
+import { toChapterResult } from './publicBibles/shape.js'
 
 export { API_BIBLES, BOOK_IDS }
 export const PUBLIC_BIBLES = [
@@ -26,17 +28,11 @@ export async function getBibleChapter(book, chapter, translation) {
   if (API_BIBLES.some((b) => b.id === translation)) {
     return bibleRequest({ action: 'chapter', bookId: BOOK_IDS[index], chapter, translation })
   }
-  if (!PUBLIC_BIBLES.some((b) => b.id === translation)) throw new Error('Choose an available Bible translation.')
-  const response = await fetch(`https://bible-api.com/${encodeURIComponent(`${book} ${chapter}`)}?translation=${translation}`, { signal: AbortSignal.timeout(15000) })
-  if (!response.ok) throw new Error('Could not load this chapter. Please try again.')
-  const data = await response.json()
-  if (!data.verses?.length) throw new Error('No verses were returned for this chapter.')
-  return {
-    translation, translationName: data.translation_name, abbreviation: translation.toUpperCase(),
-    // bible-api.com serves bare public-domain text — these translations have
-    // no section headings to show. heading: null keeps one shape for the reader.
-    verses: data.verses.map((v) => ({ verse: v.verse, endVerse: v.verse, label: String(v.verse), text: v.text.trim(), heading: null, paragraph: Math.floor((v.verse - 1) / 5) })),
-  }
+  const publicBible = PUBLIC_BIBLES.find((b) => b.id === translation)
+  if (!publicBible) throw new Error('Choose an available Bible translation.')
+  // Public-domain text ships with the app (src/data/publicBibles), so these
+  // translations make no API request and read offline.
+  return toChapterResult(publicBible, await loadPublicBook(translation, index), chapter)
 }
 
 // Loaded only when licensed Scripture is actually displayed. The provider's

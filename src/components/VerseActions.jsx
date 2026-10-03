@@ -10,7 +10,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  CheckIcon, XIcon, CopyIcon, ShareIcon, PencilIcon, BookmarkIcon, HighlighterIcon, ChevronDownIcon, BookOpenIcon,
+  CheckIcon, XIcon, CopyIcon, ShareIcon, PencilIcon, BookmarkIcon, HighlighterIcon, ChevronDownIcon, BookOpenIcon, ChatIcon,
 } from '../icons'
 import { HIGHLIGHT_COLORS } from '../lib/highlights'
 
@@ -61,6 +61,7 @@ export default function VerseActions({
   onCopy,
   onShare,
   onReflect,
+  onExplain,
   onToggleSave,
   onOpenSaved,
   onClose,
@@ -160,11 +161,12 @@ export default function VerseActions({
         </div>
         <p className="mt-1.5 pl-1 text-[0.7rem] leading-snug text-muted">Tap another verse to extend the selection, or tap the first verse to clear.</p>
 
-        <div className="mt-2 grid grid-cols-4 gap-1">
+        <div className={`mt-2 grid ${onExplain ? 'grid-cols-5' : 'grid-cols-4'} gap-1`}>
           <ActionTile icon={HighlighterIcon} label="Highlight" active={paletteOpen} toggle onClick={() => setPaletteOpen((open) => !open)} innerRef={highlightTileRef} />
           <ActionTile icon={CopyIcon} label="Copy" onClick={onCopy} />
           <ActionTile icon={ShareIcon} label="Share" onClick={onShare} />
           <ActionTile icon={PencilIcon} label="Reflect" onClick={onReflect} />
+          {onExplain && <ActionTile icon={ChatIcon} label="Explain" onClick={onExplain} />}
         </div>
 
         {paletteOpen && (

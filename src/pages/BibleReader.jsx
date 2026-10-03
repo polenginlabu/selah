@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAssistantPassage } from '../context/AssistantContext'
 import { useToast } from '../context/ToastContext'
 import { useAuth } from '../context/AuthContext'
-import { ChevronLeftIcon, ChevronRightIcon, ChevronDownIcon, SearchIcon, BookOpenIcon, CheckIcon } from '../icons'
+import { ChevronLeftIcon, ChevronRightIcon, ChevronDownIcon, SearchIcon, BookOpenIcon, CheckIcon, DownloadIcon } from '../icons'
 import { BIBLE_BOOKS, getBook } from '../data/books'
 import { API_BIBLES, PUBLIC_BIBLES, bibleRequest, getBibleChapter, trackBibleView } from '../data/bible'
 import { LEGACY_BIBLES, getLegacyChapter } from '../data/bibleLegacy'
@@ -11,14 +11,41 @@ import { formatSelectionReference } from '../../supabase/functions/_shared/bible
 import { BibleReaderSheet, BibleLocationPicker, BibleSearch, SavedVersesSheet } from '../components/BibleReaderSheet'
 import { VerseCardSheet } from '../components/VerseCard'
 import VerseActions from '../components/VerseActions'
+import ExplainSheet from '../components/ExplainSheet'
 import { getReadingPosition, saveReadingPosition } from '../data/readingPosition'
 import { getStoredHighlights, saveStoredHighlights, fetchHighlights, saveHighlights } from '../data/highlights'
 import { isHighlightColor, applyColor, removeColors, hydrateHighlights } from '../lib/highlights'
 import { savedVerses } from '../lib/savedVerses'
 import { tapVerse } from '../lib/selection'
 import { swipeDirection } from '../lib/swipe'
+import { useOfflineBibles } from '../lib/useOfflineBibles'
 
 const ALL_BIBLES = [...API_BIBLES, ...LEGACY_BIBLES, ...PUBLIC_BIBLES]
+// Only the bundled public-domain translations can be downloaded; licensed ones
+// are cached a chapter at a time as they are read (src/sw.js).
+const OFFLINE_IDS = PUBLIC_BIBLES.map((b) => b.id)
+// Zackion AI chat endpoint behind the verse "Explain" action; unset hides it.
+const ZACKION_URL = (import.meta.env.VITE_ZACKION_CHAT_URL ?? '').trim()
+
+/** Download / progress / Remove row under a downloadable translation. */
+function OfflineDownload({ option, state, onDownload, onRemove }) {
+  const { status = 'idle', done = 0, total = 66, error = '' } = state ?? {}
+  const message = status === 'downloading' ? `Downloading ${done}/${total}`
+    : status === 'downloaded' ? 'Downloaded for offline'
+      : status === 'error' ? error
+        : done > 0 ? `${done} of ${total} books saved offline` : 'About 4 MB'
+  const action = status === 'error' ? 'Retry' : status === 'downloading' ? 'Saving' : 'Download'
+  return <div className="flex items-center justify-between gap-3 border-t border-line px-4 py-2">
+    <p role="status" className="flex min-w-0 items-center gap-1.5 text-xs leading-relaxed text-muted">
+      {status === 'downloaded' && <CheckIcon width={14} height={14} className="shrink-0 text-brand-strong dark:text-brand" />}{message}
+    </p>
+    {status === 'downloaded'
+      ? <button onClick={onRemove} className="btn-ghost min-h-11 shrink-0" aria-label={`Remove ${option.abbreviation} download`}>Remove</button>
+      : <button onClick={onDownload} disabled={status === 'downloading'} className="btn-outline min-h-11 shrink-0 disabled:opacity-60" aria-label={`${action} ${option.abbreviation} for offline`}>
+        <DownloadIcon width={16} height={16} />{action}
+      </button>}
+  </div>
+}
 function readStored(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key)) ?? fallback } catch { return fallback }
 }
@@ -49,9 +76,13 @@ export default function BibleReader() {
   const [selected, setSelected] = useState(new Set())
   const [sheet, setSheet] = useState(null)
   const [cardOpen, setCardOpen] = useState(false)
+  const [explainOpen, setExplainOpen] = useState(false)
   const [fontSize, setFontSize] = useState(() => Math.min(28, Math.max(16, Number(readStored('bible:fontSize', 20)) || 20)))
   const [font, setFont] = useState(() => readStored('bible:font', 'serif') === 'sans' ? 'sans' : 'serif')
   const [verseMode, setVerseMode] = useState(() => readStored('bible:verseMode', false) === true)
+  // Lives here, not in the sheet, so a download keeps its progress when the
+  // translation sheet is closed and reopened.
+  const offline = useOfflineBibles(OFFLINE_IDS)
   const pendingVerse = useRef(null)
   const articleRef = useRef(null)
   const touchStartRef = useRef(null)
@@ -246,6 +277,8 @@ export default function BibleReader() {
     reference: formatSelectionReference(book, chapter, selectedRows),
     text: selectedRows.map((v) => v.text).join(' '), translation: current.translationName,
   } : null, [selectedRows, book, chapter, current])
+  // An explanation belongs to its selection; never reopen it for the next one.
+  useEffect(() => { if (!selection) setExplainOpen(false) }, [selection])
   const assistantPassage = useMemo(() => current && !loading && !error ? {
     reference: selection?.reference ?? `${book} ${chapter}`, translation: current.translationName,
     verses: (selectedRows.length ? selectedRows : current.verses).map((v) => ({ verse: v.verse, text: v.text })),
@@ -497,6 +530,7 @@ export default function BibleReader() {
       onCopy={copySelection}
       onShare={() => setCardOpen(true)}
       onReflect={() => navigate('/devotion/new', { state: { verse: selection } })}
+      onExplain={ZACKION_URL ? () => setExplainOpen(true) : undefined}
       onToggleSave={handleToggleSave}
       onOpenSaved={openSaved}
       onClose={() => {
@@ -512,6 +546,7 @@ export default function BibleReader() {
     />}
 
     {cardOpen && selection && <VerseCardSheet selection={selection} translation={version.abbreviation} onClose={() => setCardOpen(false)} />}
+    {explainOpen && selection && <ExplainSheet reference={selection.reference} url={ZACKION_URL} onClose={() => setExplainOpen(false)} />}
 
     {sheet && <BibleReaderSheet title={{ passage: 'Choose a passage', translation: 'Bible translations', appearance: 'Reading appearance', search: 'Search Scripture', saved: 'Saved verses' }[sheet]} onClose={() => setSheet(null)}>
       {sheet === 'passage' && <BibleLocationPicker currentBook={book} currentChapter={chapter} onSelect={goTo} />}
@@ -520,12 +555,17 @@ export default function BibleReader() {
         {catalogueError && <p className="rounded-xl bg-raised p-3 text-xs text-muted">Could not check subscription access. You can retry a version or use WEB, KJV, or BBE.</p>}
         {ALL_BIBLES.map((option) => {
           const unavailable = option.bibleId && catalogue && !catalogue.some((b) => b.id === option.id)
-          return <button key={option.id} disabled={unavailable} onClick={() => { setPosition((p) => ({ ...p, translation: option.id })); setSelected(new Set()); setAnchor(null); pendingVerse.current = null; setSheet(null) }} aria-pressed={translation === option.id}
-            className={`flex min-h-20 w-full items-center gap-3 rounded-2xl border p-4 text-left disabled:opacity-40 ${translation === option.id ? 'border-brand bg-brand-wash' : 'border-line bg-surface'}`}>
-            <span className="flex h-12 w-14 shrink-0 items-center justify-center rounded-xl bg-raised text-xs font-bold text-brand-strong dark:text-brand">{option.abbreviation}</span>
-            <span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-ink">{option.name}</span><span className="mt-1 block text-xs leading-relaxed text-muted">{unavailable ? 'Not enabled on the subscription' : option.description}</span></span>
-            {translation === option.id && <CheckIcon width={18} height={18} className="shrink-0 text-brand-strong dark:text-brand" />}
-          </button>
+          const bundled = OFFLINE_IDS.includes(option.id)
+          return <div key={option.id} className={`rounded-2xl border ${translation === option.id ? 'border-brand bg-brand-wash' : 'border-line bg-surface'}`}>
+            <button disabled={unavailable} onClick={() => { setPosition((p) => ({ ...p, translation: option.id })); setSelected(new Set()); setAnchor(null); pendingVerse.current = null; setSheet(null) }} aria-pressed={translation === option.id}
+              className="flex min-h-20 w-full items-center gap-3 p-4 text-left disabled:opacity-40">
+              <span className="flex h-12 w-14 shrink-0 items-center justify-center rounded-xl bg-raised text-xs font-bold text-brand-strong dark:text-brand">{option.abbreviation}</span>
+              <span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-ink">{option.name}</span><span className="mt-1 block text-xs leading-relaxed text-muted">{unavailable ? 'Not enabled on the subscription' : option.description}</span></span>
+              {translation === option.id && <CheckIcon width={18} height={18} className="shrink-0 text-brand-strong dark:text-brand" />}
+            </button>
+            {bundled && offline.supported && <OfflineDownload option={option} state={offline.states[option.id]} onDownload={() => offline.download(option.id)} onRemove={() => offline.remove(option.id)} />}
+            {!bundled && offline.supported && <p className="-mt-2 px-4 pb-3 text-xs text-muted">Available offline after reading</p>}
+          </div>
         })}
       </div>}
       {sheet === 'appearance' && <div className="space-y-6">

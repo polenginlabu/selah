@@ -1,8 +1,8 @@
 /// <reference lib="webworker" />
 import { precacheAndRoute, cleanupOutdatedCaches, createHandlerBoundToURL } from 'workbox-precaching'
 import { NavigationRoute, registerRoute } from 'workbox-routing'
-import { NetworkFirst, StaleWhileRevalidate } from 'workbox-strategies'
-import { ExpirationPlugin } from 'workbox-expiration'
+import { CacheFirst, NetworkFirst, StaleWhileRevalidate } from 'workbox-strategies'
+import { CacheExpiration, ExpirationPlugin } from 'workbox-expiration'
 import { CacheableResponsePlugin } from 'workbox-cacheable-response'
 
 /**
@@ -38,17 +38,68 @@ registerRoute(
 // --- 2. Runtime caching ----------------------------------------------------
 
 // Scripture is immutable — Psalm 46 will not change — so once a chapter has
-// been read it can be served from cache indefinitely. This is what makes the
-// Bible reader work on a bad connection.
+// been read it is served from cache with no further network request. This is
+// what makes the Bible reader work offline and on a bad connection. Only a
+// real 200 is kept: CacheFirst never revalidates, so a cached opaque failure
+// would stick.
 registerRoute(
   ({ url }) => url.hostname === 'api.esv.org' || url.hostname === 'api.nlt.to',
-  new StaleWhileRevalidate({
+  new CacheFirst({
     cacheName: 'scripture-v1',
     plugins: [
-      new CacheableResponsePlugin({ statuses: [0, 200] }),
+      new CacheableResponsePlugin({ statuses: [200] }),
       new ExpirationPlugin({ maxEntries: 300, maxAgeSeconds: 60 * 60 * 24 * 365 }),
     ],
   })
+)
+
+// Bundled public-domain Bibles (src/data/publicBibles): one chunk per book,
+// kept out of the precache by vite.config.js so installing the app doesn't
+// download three whole Bibles. A book is cached the first time it is opened.
+// The filename is content-hashed, so a cached book stays valid across deploys.
+// "Download for offline" (src/data/publicBibles/offline.js) writes a whole
+// translation into this same cache, so downloaded books are served from here.
+// Expiration only counts entries this route has served, and a build has at
+// most 198 books (three translations), so on-demand reading alone can never
+// reach the limit; the headroom is for books left by older builds, which are
+// least recently used and so are evicted first.
+registerRoute(
+  ({ url }) => url.origin === self.location.origin && url.pathname.startsWith('/assets/bible/'),
+  new CacheFirst({
+    cacheName: 'bible-public-v1',
+    plugins: [
+      new CacheableResponsePlugin({ statuses: [200] }),
+      new ExpirationPlugin({ maxEntries: 500 }),
+    ],
+  })
+)
+
+// API.Bible translations (NIV UK, MSG, AMP) come through the bible-reader edge
+// function as a POST, and the Cache API cannot store POST requests, so no
+// stock strategy can serve them offline. Instead, chapter reads are cached
+// under a synthetic GET key built from the request body. Search and catalogue
+// calls pass straight through. A cached chapter is served without contacting
+// the function, so it stays readable on this device without a session.
+const edgeChapters = new CacheExpiration('scripture-edge-v1', { maxEntries: 300 })
+registerRoute(
+  ({ url }) => url.pathname.endsWith('/functions/v1/bible-reader'),
+  async ({ request }) => {
+    const body = await request.clone().json().catch(() => null)
+    const { action, translation, bookId, chapter } = body ?? {}
+    if (action !== 'chapter' || !translation || !bookId || !chapter) return fetch(request)
+    const key = `${self.location.origin}/__bible-chapter/${[translation, bookId, chapter].map(encodeURIComponent).join('/')}`
+    const cache = await caches.open('scripture-edge-v1')
+    const cached = await cache.match(key)
+    if (cached) return cached
+    const response = await fetch(request)
+    if (response.status === 200) {
+      await cache.put(key, response.clone())
+      await edgeChapters.updateTimestamp(key)
+      await edgeChapters.expireEntries()
+    }
+    return response
+  },
+  'POST'
 )
 
 // Supabase REST reads: network first so fresh data always wins, falling back

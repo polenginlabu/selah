@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+import { MANIFEST_FILE, buildManifest, chunkFileName } from './scripts/bible/chunkManifest.js'
 
 // Stamped into the bundle AND written to /version.json, so a running tab can
 // ask the server "is there a newer build than me?" without trusting a single
@@ -29,6 +30,25 @@ function versionManifest() {
   }
 }
 
+/**
+ * Emits assets/bible-index.json: the URL of every bundled Bible book chunk,
+ * by translation and book. "Download for offline" fetches exactly these, so it
+ * never has to guess a hashed filename.
+ */
+function bibleChunkManifest() {
+  return {
+    name: 'selah-bible-chunk-manifest',
+    apply: 'build',
+    generateBundle(_options, bundle) {
+      this.emitFile({
+        type: 'asset',
+        fileName: MANIFEST_FILE,
+        source: JSON.stringify(buildManifest(Object.keys(bundle))),
+      })
+    },
+  }
+}
+
 export default defineConfig({
   define: {
     __BUILD_ID__: JSON.stringify(BUILD_ID),
@@ -36,6 +56,7 @@ export default defineConfig({
   plugins: [
     react(),
     versionManifest(),
+    bibleChunkManifest(),
     VitePWA({
       // injectManifest, not generateSW: Firebase Cloud Messaging already owns
       // a service worker at scope "/", and only one can win there. Registering
@@ -56,7 +77,13 @@ export default defineConfig({
         // image is bundled but never precached, so it is the one element that
         // breaks when the installed app opens offline — which is the whole
         // reason it is bundled rather than hot-linked.
-        globPatterns: ['**/*.{js,css,html,png,jpg,jpeg,webp,svg,woff2,lottie}'],
+        // The Bible chunk manifest is precached so download state can be read
+        // offline.
+        globPatterns: ['**/*.{js,css,html,png,jpg,jpeg,webp,svg,woff2,lottie}', MANIFEST_FILE],
+        // Bundled Bible books (see chunkFileNames below) are cached on demand
+        // by src/sw.js instead; precaching them would add every book of every
+        // public-domain translation to each install.
+        globIgnores: ['assets/bible/**'],
         // The Bible reader can pull a large chapter payload; the default 2 MiB
         // cap would silently drop assets from the precache.
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
@@ -95,7 +122,11 @@ export default defineConfig({
     rollupOptions: {
       output: {
         entryFileNames: 'assets/app.js',
-        chunkFileNames: 'assets/[name]-[hash].js',
+        // One chunk per bundled Bible book, in its own folder so the service
+        // worker can leave it out of the precache and cache it on demand.
+        // The translation is in the name so a cached chunk can be attributed
+        // to it (download state, Remove download).
+        chunkFileNames: (chunk) => chunkFileName(chunk.facadeModuleId) ?? 'assets/[name]-[hash].js',
         assetFileNames: 'assets/app[extname]',
       },
     },
