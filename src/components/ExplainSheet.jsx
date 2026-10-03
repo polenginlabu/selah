@@ -60,7 +60,6 @@ export default function ExplainSheet({ reference, url, onClose }) {
       <Markdown text={text} />
     </div>}
     <div className="mt-6 flex items-center justify-between gap-3 border-t border-line pt-4">
-      <p className="text-xs text-muted">Explanation by Zackion AI</p>
       <button onClick={onClose} className="btn-outline min-h-11">Close</button>
     </div>
   </BibleReaderSheet>
