@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAssistantPassage } from '../context/AssistantContext'
 import { useToast } from '../context/ToastContext'
 import { useAuth } from '../context/AuthContext'
-import { ChevronLeftIcon, ChevronRightIcon, ChevronDownIcon, SearchIcon, BookOpenIcon, CheckIcon, DownloadIcon } from '../icons'
+import { ChevronLeftIcon, ChevronRightIcon, ChevronDownIcon, SearchIcon, BookOpenIcon, BookmarkIcon, CheckIcon, DownloadIcon } from '../icons'
 import { BIBLE_BOOKS, getBook } from '../data/books'
 import { API_BIBLES, PUBLIC_BIBLES, bibleRequest, getBibleChapter, trackBibleView } from '../data/bible'
 import { LEGACY_BIBLES, getLegacyChapter } from '../data/bibleLegacy'
@@ -13,9 +13,11 @@ import { VerseCardSheet } from '../components/VerseCard'
 import VerseActions from '../components/VerseActions'
 import ExplainSheet from '../components/ExplainSheet'
 import { getReadingPosition, saveReadingPosition } from '../data/readingPosition'
+import { getBookmark, saveBookmark, clearBookmark } from '../data/bookmark'
 import { getStoredHighlights, saveStoredHighlights, fetchHighlights, saveHighlights } from '../data/highlights'
 import { isHighlightColor, applyColor, removeColors, hydrateHighlights } from '../lib/highlights'
 import { savedVerses } from '../lib/savedVerses'
+import { sanitizeBookmark, toggleBookmark, isBookmarked, bookmarkLabel, resolveBookmarkTranslation, readBookmark, writeBookmark } from '../lib/bookmark'
 import { tapVerse, joinSelectedText } from '../lib/selection'
 import { swipeDirection } from '../lib/swipe'
 import { useOfflineBibles } from '../lib/useOfflineBibles'
@@ -52,6 +54,12 @@ function readStored(key, fallback) {
 function saveStored(key, value) {
   try { localStorage.setItem(key, JSON.stringify(value)) } catch { /* Reading works without storage. */ }
 }
+// Resolved lazily and guarded: a storage-blocked context can throw on access.
+function bookmarkStorage() {
+  try { return typeof localStorage !== 'undefined' ? localStorage : null } catch { return null }
+}
+const isTranslation = (id) => ALL_BIBLES.some((b) => b.id === id)
+const BOOKMARK_OPTIONS = { getBook, isTranslation }
 function savedPosition() {
   const saved = readStored('bible:position', {})
   const book = getBook(saved.book) ?? getBook('John')
@@ -121,6 +129,16 @@ export default function BibleReader() {
   const hydratedRef = useRef(false)
   const initialPositionRef = useRef(position)
   const latestPositionRef = useRef(position)
+  // Chapter bookmark (src/lib/bookmark.js): a ribbon the reader sets by hand,
+  // independent of the automatic position above. bookmarkHydratedRef gates
+  // server writes until the account row has been read; bookmarkDirtyRef marks
+  // a set/remove made while that read was in flight, so it wins over the
+  // server copy instead of being reverted by it.
+  const [bookmark, setBookmark] = useState(() => readBookmark(bookmarkStorage(), BOOKMARK_OPTIONS))
+  const bookmarkRef = useRef(bookmark)
+  const bookmarkHydratedRef = useRef(false)
+  const bookmarkDirtyRef = useRef(false)
+  const marked = isBookmarked(bookmark, position)
   const requestKey = `${book}:${chapter}:${translation}`
   const current = chapterData?.requestKey === requestKey ? chapterData : null
   const version = ALL_BIBLES.find((b) => b.id === translation)
@@ -200,6 +218,37 @@ export default function BibleReader() {
         }))
       })
       .catch(() => { hydratedRef.current = true })
+    return () => { cancelled = true }
+  }, [user])
+  // Restore the account bookmark once per sign-in. The server copy wins over
+  // localStorage; with no server row, a local bookmark is uploaded. A set or
+  // remove made while the read was in flight is pushed instead. A failed read
+  // leaves the gate closed so nothing overwrites the account row.
+  useEffect(() => {
+    let cancelled = false
+    bookmarkHydratedRef.current = false
+    bookmarkDirtyRef.current = false
+    if (!user) return
+    getBookmark(user.id)
+      .then((saved) => {
+        if (cancelled) return
+        bookmarkHydratedRef.current = true
+        const local = bookmarkRef.current
+        if (bookmarkDirtyRef.current || !saved) {
+          bookmarkDirtyRef.current = false
+          // A retired translation (null) uploads as the one being read; the
+          // column is not null and the jump would fall back to it anyway.
+          if (local) saveBookmark(user.id, { ...local, translation: local.translation ?? latestPositionRef.current.translation }).catch(() => {})
+          else if (saved) clearBookmark(user.id).catch(() => {})
+          return
+        }
+        const next = sanitizeBookmark(saved, BOOKMARK_OPTIONS)
+        if (!next) return
+        bookmarkRef.current = next
+        setBookmark(next)
+        writeBookmark(bookmarkStorage(), next)
+      })
+      .catch(() => { /* best-effort sync; the local bookmark still works. */ })
     return () => { cancelled = true }
   }, [user])
   useEffect(() => { saveStored('bible:fontSize', fontSize) }, [fontSize])
@@ -318,6 +367,29 @@ export default function BibleReader() {
       setPosition((p) => ({ ...p, book: nextBook, chapter: targetChapter }))
       window.scrollTo({ top: 0 })
     }
+  }
+  function toggleBookmarkHere() {
+    const next = toggleBookmark(bookmark, position)
+    bookmarkRef.current = next
+    setBookmark(next)
+    const stored = writeBookmark(bookmarkStorage(), next)
+    if (user && bookmarkHydratedRef.current) (next ? saveBookmark(user.id, next) : clearBookmark(user.id)).catch(() => {})
+    else if (user) bookmarkDirtyRef.current = true
+    if (!stored) toast.error(next ? 'Could not save — your browser blocked storage.' : 'Could not remove — your browser blocked storage.')
+    else toast.success(next ? `Bookmarked ${bookmarkLabel(next)}` : 'Bookmark removed')
+  }
+  // Jumps to the bookmark without moving it. A translation that is no longer
+  // offered, or not enabled on the subscription (same test as the translation
+  // sheet), falls back to the one being read.
+  function goToBookmark() {
+    if (!bookmark) return
+    const isAvailable = (id) => {
+      const option = ALL_BIBLES.find((b) => b.id === id)
+      return Boolean(option) && !(option.bibleId && catalogue && !catalogue.some((b) => b.id === option.id))
+    }
+    const nextTranslation = resolveBookmarkTranslation(bookmark, translation, isAvailable)
+    if (nextTranslation !== translation) setPosition((p) => ({ ...p, translation: nextTranslation }))
+    goTo(bookmark.book, bookmark.chapter)
   }
   const firstChapter = book === 'Genesis' && chapter === 1
   const lastChapter = book === 'Revelation' && chapter === 22
@@ -465,6 +537,9 @@ export default function BibleReader() {
       <div><p className="eyebrow">The living Word</p><h1 className="mt-1 text-2xl">Bible</h1></div>
       <div className="flex gap-1">
         <button onClick={() => setSheet('appearance')} className="bible-icon-button font-serif text-xl" aria-label="Reading appearance">Aa</button>
+        <button onClick={toggleBookmarkHere} className="bible-icon-button" aria-pressed={marked} aria-label={marked ? `Remove bookmark from ${book} ${chapter}` : `Bookmark ${book} ${chapter}`}>
+          <BookmarkIcon width={21} height={21} fill={marked ? 'currentColor' : 'none'} className={marked ? 'text-brand-strong dark:text-brand' : undefined} />
+        </button>
         <button onClick={() => setSheet('search')} className="bible-icon-button" aria-label="Search the Bible"><SearchIcon width={21} height={21} /></button>
       </div>
     </div>
@@ -479,6 +554,9 @@ export default function BibleReader() {
         {version.abbreviation}<ChevronDownIcon width={14} height={14} />
       </button>
     </div>
+    {bookmark && !marked && <button onClick={goToBookmark} className="btn-outline mt-2 min-h-11 w-full justify-center" aria-label={`Go to bookmark: ${bookmarkLabel(bookmark)}`}>
+      <BookmarkIcon width={16} height={16} fill="currentColor" />Go to bookmark: {bookmarkLabel(bookmark)}
+    </button>}
 
     <header className="pb-7 pt-10 text-center">
       <p className="eyebrow">{bookInfo.testament === 'OT' ? 'Old' : 'New'} Testament</p>
