@@ -7,9 +7,9 @@
 // row as generate-daily-background.js and upload-background.js, plus the
 // photo's attribution.
 //
-// Search: Pexels when PEXELS_API_KEY is set, Openverse (no key, CC0 and Public
-// Domain Mark only) otherwise or when Pexels fails. Keywords come from the
-// day's devotion row — see buildImageQueries() in selah/stockBackground.js.
+// Search: Pixabay when PIXABAY_API_KEY is set, Openverse (no key, CC0 and
+// Public Domain Mark only) otherwise or when Pixabay fails. Keywords come from
+// the day's devotion row — see buildImageQueries() in selah/stockBackground.js.
 //
 // Idempotent by date: an existing row means nothing to do, and no provider is
 // contacted. --force replaces the row and the image.
@@ -27,7 +27,7 @@
 // Env (.env.local, gitignored):
 //   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 //   FIREBASE_SERVICE_ACCOUNT, FIREBASE_STORAGE_BUCKET
-//   PEXELS_API_KEY              optional; Openverse is used without it
+//   PIXABAY_API_KEY             optional; Openverse is used without it
 import { writeFileSync } from 'node:fs'
 import sharp from 'sharp'
 import { createClient } from '@supabase/supabase-js'
@@ -39,7 +39,7 @@ import { parseServiceAccount, uploadBackground } from './selah/firebaseStorage.j
 import { loadEnv } from './selah/env.js'
 import {
   buildImageQueries, findBackground, downloadImage, buildAttribution, creditLine,
-  isLargeEnough, NO_REPEAT_DAYS,
+  minShortSide, NO_REPEAT_DAYS,
 } from './selah/stockBackground.js'
 
 /** How many ranked candidates to try before giving up on downloads. */
@@ -156,11 +156,11 @@ async function main() {
   const theme = devotion?.themeLabel || devotion?.theme || themeForDate(date).theme
   log(`theme: ${theme}`)
   log(`queries: ${queries.map((q) => `"${q}"`).join(', ')}`)
-  log(`provider: ${env.PEXELS_API_KEY ? 'pexels, then openverse' : 'openverse (no PEXELS_API_KEY)'}`)
+  log(`provider: ${env.PIXABAY_API_KEY ? 'pixabay, then openverse' : 'openverse (no PIXABAY_API_KEY)'}`)
 
   // --- Find and download ----------------------------------------------------
   const found = await findBackground({
-    queries, dateISO: date, recentIds, pexelsApiKey: env.PEXELS_API_KEY || null, log,
+    queries, dateISO: date, recentIds, pixabayApiKey: env.PIXABAY_API_KEY || null, log,
   })
   if (!found) throw new Error('No freely-licensed photo matched any query.')
 
@@ -171,7 +171,7 @@ async function main() {
       const buffer = await downloadImage(candidate.imageUrl)
       assertUsableImage(buffer)
       const meta = await sharp(buffer).metadata()
-      if (!isLargeEnough(meta.width, meta.height)) {
+      if (Math.min(meta.width, meta.height) < minShortSide(candidate.provider)) {
         throw new Error(`only ${meta.width}x${meta.height}`)
       }
       picked = candidate

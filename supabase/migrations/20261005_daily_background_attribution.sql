@@ -1,7 +1,7 @@
 -- Attribution for daily backgrounds that are stock photographs.
 --
--- scripts/fetch-daily-background.js picks a freely-licensed photo (Pexels
--- License, CC0, Public Domain Mark) for each day and records where it came
+-- scripts/fetch-daily-background.js picks a freely-licensed photo (Pixabay
+-- Content License, CC0, Public Domain Mark) for each day and records where it came
 -- from: provider, source id and page, photographer, licence. The verse card
 -- shows the credit, and the source id keeps the same photo from being reused
 -- within 30 days.

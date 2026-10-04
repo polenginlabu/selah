@@ -268,7 +268,7 @@ Nightly Action, after the devotion step (or by hand)
   └─ scripts/fetch-daily-background.js
        ├─ read daily_devotions        title, verse, theme for the date
        ├─ buildImageQueries()         2-4 nature keywords, most specific first
-       ├─ Pexels (PEXELS_API_KEY) → Openverse (no key)   licence-filtered search
+       ├─ Pixabay (PIXABAY_API_KEY) → Openverse (no key)   licence-filtered search
        ├─ rankCandidates()            content filter, 30-day no-repeat, date-seeded pick
        ├─ toBackgroundWebp()          sharp → 1080×1920 WebP, q82
        ├─ uploadBackground()          Firebase Storage (public, immutable)
@@ -292,10 +292,14 @@ devotion for the date it uses the date's rotating theme. Logic and tests:
 `scripts/selah/stockBackground.js`.
 
 **Licences.** Only photos that may be used commercially without permission or a
-credit on the shared image are accepted: the **Pexels License**, **CC0** and the
-**Public Domain Mark**. CC-BY and other attribution-required licences are
-refused, because the shared card carries no credit. Openverse is queried with
-`license=cc0,pdm`, `category=photograph`, `mature=false`.
+credit on the shared image are accepted: the **Pixabay Content License**,
+**CC0** and the **Public Domain Mark**. CC-BY and other attribution-required
+licences are refused, because the shared card carries no credit. Pixabay is
+queried with `image_type=photo`, `orientation=vertical`, `safesearch=true` and a
+1080×1920 minimum original size; its `largeImageURL` (1280px on the long side)
+is downloaded, upscaled to the card and served from Firebase, never hotlinked.
+Openverse is queried with `license=cc0,pdm`, `category=photograph`,
+`mature=false`.
 
 **Attribution.** Each row stores `attribution` (provider, source id and page,
 photographer, licence and licence URL, search query, fetch time); the same
@@ -373,7 +377,7 @@ npm run firebase:check    # prints the bucket's current CORS configuration
 | --- | --- | --- |
 | `FIREBASE_SERVICE_ACCOUNT` | GitHub Actions + `.env.local` | Service account JSON (raw or base64) with **Storage Object Admin**. Firebase console → Project settings → Service accounts → Generate new private key. |
 | `FIREBASE_STORAGE_BUCKET` | GitHub Actions + `.env.local` | e.g. `devotional-app-c2633.firebasestorage.app` |
-| `PEXELS_API_KEY` | optional, GitHub Actions + `.env.local` | Free key from pexels.com/api. When set, Pexels is searched first; without it (or if Pexels fails) the script uses Openverse, which needs no key. |
+| `PIXABAY_API_KEY` | optional, GitHub Actions + `.env.local` | Free key from pixabay.com/api/docs. When set, Pixabay is searched first; without it (or if Pixabay fails) the script uses Openverse, which needs no key. |
 | `BACKGROUND_MODEL` | optional | Only for `generate-daily-background.js`. Defaults to `google/gemini-3.1-flash-image` (Nano Banana 2). |
 
 `SUPABASE_SERVICE_ROLE_KEY` and `VITE_SUPABASE_URL` are already configured for
@@ -462,8 +466,9 @@ orphaned object.
 nothing that passed the licence and content filters. Rerun with `--theme` to
 try a different phrase, or upload one by hand.
 
-**"pexels returned HTTP 401/403 — skipping pexels"** — `PEXELS_API_KEY` is wrong
-or revoked. The run continues with Openverse.
+**"pixabay returned HTTP 400/401 … — skipping pixabay"** — `PIXABAY_API_KEY` is
+wrong or revoked. **"pixabay returned HTTP 429 (rate limited)"** — the key's
+request rate limit was hit. Either way the run continues with Openverse.
 
 **"Could not read recent backgrounds … attribution"** — the attribution
 migration has not been pushed. See step 1.

@@ -7,9 +7,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   buildImageQueries, buildImageQuery, THEME_QUERIES, GENERIC_QUERY,
-  normalizePexels, normalizeOpenverse, isAllowedLicense, rejectionReason,
+  normalizePixabay, normalizeOpenverse, isAllowedLicense, rejectionReason,
   isSuitableCandidate, rankCandidates, pickCandidate, buildAttribution, creditLine,
-  findBackground, downloadImage, searchOpenverse, searchPexels,
+  findBackground, downloadImage, searchOpenverse, searchPixabay, minShortSide, redact,
 } from './stockBackground.js'
 import { THEMES as BACKGROUND_THEMES, toBackgroundRow, themeForDate } from './background.js'
 import { THEMES as DEVOTION_THEMES } from './themes.js'
@@ -98,19 +98,31 @@ test('queries never ask for people or text', () => {
 
 // --- Normalisers -----------------------------------------------------------
 
-test('normalizePexels maps the API shape and resizes on the CDN', () => {
-  const [c] = normalizePexels({
-    photos: [{
-      id: 42, width: 4000, height: 6000, url: 'https://www.pexels.com/photo/42/',
-      photographer: 'Jane Doe', photographer_url: 'https://www.pexels.com/@jane',
-      alt: 'Misty lake at dawn', src: { original: 'https://images.pexels.com/photos/42/a.jpeg' },
+test('normalizePixabay maps the API shape to the large download and licence', () => {
+  const [c] = normalizePixabay({
+    hits: [{
+      id: 42, imageWidth: 4000, imageHeight: 6000, pageURL: 'https://pixabay.com/photos/lake-42/',
+      user: 'janedoe', user_id: 9, tags: 'lake, mist, dawn',
+      largeImageURL: 'https://pixabay.com/get/42_1280.jpg',
     }],
   })
-  assert.equal(c.sourceId, 'pexels:42')
-  assert.equal(c.license, 'pexels')
-  assert.equal(c.creator, 'Jane Doe')
-  assert.match(c.imageUrl, /^https:\/\/images\.pexels\.com\/photos\/42\/a\.jpeg\?/)
+  assert.equal(c.provider, 'pixabay')
+  assert.equal(c.sourceId, 'pixabay:42')
+  assert.equal(c.license, 'Pixabay Content License')
+  assert.equal(c.licenseUrl, 'https://pixabay.com/service/license-summary/')
+  assert.equal(c.creator, 'janedoe')
+  assert.equal(c.creatorUrl, 'https://pixabay.com/users/janedoe-9/')
+  assert.equal(c.sourceUrl, 'https://pixabay.com/photos/lake-42/')
+  assert.equal(c.imageUrl, 'https://pixabay.com/get/42_1280.jpg')
+  assert.equal(c.text, 'lake, mist, dawn')
   assert.ok(isSuitableCandidate(c))
+})
+
+test('Pixabay tags go through the deny-list', () => {
+  const [c] = normalizePixabay({
+    hits: [{ id: 1, imageWidth: 3000, imageHeight: 5000, tags: 'woman, lake', largeImageURL: 'https://pixabay.com/get/1.jpg' }],
+  })
+  assert.equal(rejectionReason(c), 'mentions "woman"')
 })
 
 test('normalizeOpenverse maps licence, landing page and tags', () => {
@@ -128,20 +140,21 @@ test('normalizeOpenverse maps licence, landing page and tags', () => {
 })
 
 test('normalisers tolerate empty responses', () => {
-  assert.deepEqual(normalizePexels({}), [])
+  assert.deepEqual(normalizePixabay({}), [])
   assert.deepEqual(normalizeOpenverse(null), [])
 })
 
 // --- Filters ---------------------------------------------------------------
 
-test('only Pexels, CC0 and PDM licences are allowed', () => {
-  assert.ok(isAllowedLicense('pexels', 'pexels'))
+test('only Pixabay Content License, CC0 and PDM licences are allowed', () => {
+  assert.ok(isAllowedLicense('pixabay', 'Pixabay Content License'))
+  assert.equal(isAllowedLicense('pixabay', 'cc0'), false)
   assert.ok(isAllowedLicense('openverse', 'cc0'))
   assert.ok(isAllowedLicense('openverse', 'PDM'))
   for (const l of ['by', 'by-sa', 'by-nc', 'by-nd', 'by-nc-sa', '', undefined, 'unknown']) {
     assert.equal(isAllowedLicense('openverse', l), false, String(l))
   }
-  assert.equal(isAllowedLicense('openverse', 'pexels'), false)
+  assert.equal(isAllowedLicense('openverse', 'Pixabay Content License'), false)
   assert.equal(isAllowedLicense('unknown', 'cc0'), false)
 })
 
@@ -217,7 +230,7 @@ test('buildAttribution records source, creator and licence', () => {
 })
 
 test('creditLine names creator and provider', () => {
-  assert.equal(creditLine({ provider: 'pexels', creator: 'Jane Doe' }), 'Photo: Jane Doe · Pexels')
+  assert.equal(creditLine({ provider: 'pixabay', creator: 'Jane Doe' }), 'Photo: Jane Doe · Pixabay')
   assert.equal(creditLine({ provider: 'openverse', creator: null }), 'Photo: Unknown · Openverse')
   assert.equal(creditLine(null), null)
 })
@@ -245,12 +258,17 @@ function stubFetch(handler) {
   return fn
 }
 
-const PEXELS_BODY = {
-  photos: [{
-    id: 7, width: 3000, height: 5000, url: 'https://www.pexels.com/photo/7/', photographer: 'P',
-    photographer_url: null, alt: 'calm lake', src: { original: 'https://images.pexels.com/photos/7/a.jpeg' },
+const PIXABAY_BODY = {
+  total: 1,
+  totalHits: 1,
+  hits: [{
+    id: 7, imageWidth: 3000, imageHeight: 5000, pageURL: 'https://pixabay.com/photos/lake-7/', user: 'P',
+    user_id: 3, tags: 'calm, lake', largeImageURL: 'https://pixabay.com/get/7_1280.jpg',
   }],
 }
+
+// A fake key that would be obvious in any message it leaked into.
+const SENTINEL_KEY = 'test-key-not-real-0123456789'
 const OPENVERSE_BODY = {
   results: [{
     id: 'ov1', url: 'https://upload.wikimedia.org/ov1.jpg', foreign_landing_url: 'https://commons.wikimedia.org/ov1',
@@ -268,11 +286,63 @@ test('openverse search asks only for CC0/PDM photographs, non-mature', async () 
   assert.equal(url.searchParams.get('q'), 'calm lake')
 })
 
-test('pexels search sends the key and asks for portrait photos', async () => {
-  const fetchImpl = stubFetch(() => jsonResponse(PEXELS_BODY))
-  await searchPexels('calm lake', { apiKey: 'k', fetchImpl })
-  assert.equal(fetchImpl.calls[0].init.headers.Authorization, 'k')
-  assert.equal(new URL(fetchImpl.calls[0].url).searchParams.get('orientation'), 'portrait')
+test('pixabay search sends the key and asks for large, safe, vertical photos', async () => {
+  const fetchImpl = stubFetch(() => jsonResponse(PIXABAY_BODY))
+  await searchPixabay('calm lake', { apiKey: SENTINEL_KEY, fetchImpl })
+  const url = new URL(fetchImpl.calls[0].url)
+  assert.equal(url.origin + url.pathname, 'https://pixabay.com/api/')
+  assert.equal(url.searchParams.get('key'), SENTINEL_KEY)
+  assert.equal(url.searchParams.get('q'), 'calm lake')
+  assert.equal(url.searchParams.get('image_type'), 'photo')
+  assert.equal(url.searchParams.get('orientation'), 'vertical')
+  assert.equal(url.searchParams.get('safesearch'), 'true')
+  assert.equal(url.searchParams.get('order'), 'popular')
+  const perPage = Number(url.searchParams.get('per_page'))
+  assert.ok(perPage >= 3 && perPage <= 200, String(perPage))
+  assert.equal(url.searchParams.get('min_width'), '1080')
+  assert.equal(url.searchParams.get('min_height'), '1920')
+  assert.match(fetchImpl.calls[0].url, /q=calm\+lake|q=calm%20lake/)
+})
+
+test('pixabay queries are cut to the 100-character limit', async () => {
+  const fetchImpl = stubFetch(() => jsonResponse(PIXABAY_BODY))
+  await searchPixabay('a'.repeat(150), { apiKey: SENTINEL_KEY, fetchImpl })
+  assert.equal(new URL(fetchImpl.calls[0].url).searchParams.get('q').length, 100)
+})
+
+for (const status of [400, 401, 429]) {
+  test(`pixabay HTTP ${status} names the status and never the key`, async () => {
+    const fetchImpl = stubFetch(() => jsonResponse({}, status))
+    const err = await searchPixabay('calm lake', { apiKey: SENTINEL_KEY, fetchImpl }).catch((e) => e)
+    assert.match(err.message, new RegExp(`pixabay returned HTTP ${status}`))
+    assert.ok(!err.message.includes(SENTINEL_KEY), err.message)
+    assert.ok(!/key=/.test(err.message), err.message)
+  })
+}
+
+test('pixabay 429 is reported as rate limited', async () => {
+  const fetchImpl = stubFetch(() => jsonResponse({}, 429))
+  await assert.rejects(searchPixabay('calm lake', { apiKey: SENTINEL_KEY, fetchImpl }), /rate limited/)
+})
+
+test('a pixabay network error that quotes the URL is redacted', async () => {
+  const fetchImpl = stubFetch((url) => { throw new Error(`fetch failed for ${url}`) })
+  const err = await searchPixabay('calm lake', { apiKey: SENTINEL_KEY, fetchImpl }).catch((e) => e)
+  assert.match(err.message, /pixabay request failed/)
+  assert.ok(!err.message.includes(SENTINEL_KEY), err.message)
+  assert.match(err.message, /key=\[redacted\]/)
+})
+
+test('unreadable pixabay JSON that quotes the key is redacted', async () => {
+  const fetchImpl = stubFetch(() => ({ ok: true, status: 200, json: async () => { throw new Error(`bad body ${SENTINEL_KEY}`) } }))
+  const err = await searchPixabay('calm lake', { apiKey: SENTINEL_KEY, fetchImpl }).catch((e) => e)
+  assert.match(err.message, /unreadable JSON/)
+  assert.ok(!err.message.includes(SENTINEL_KEY), err.message)
+})
+
+test('redact strips the secret and any key parameter', () => {
+  assert.equal(redact('https://pixabay.com/api/?key=abc&q=x', null), 'https://pixabay.com/api/?key=[redacted]&q=x')
+  assert.equal(redact('token s3cret here', 's3cret'), 'token [redacted] here')
 })
 
 test('with no key, only Openverse is called', async () => {
@@ -282,17 +352,98 @@ test('with no key, only Openverse is called', async () => {
   assert.ok(fetchImpl.calls.every((c) => c.url.startsWith('https://api.openverse.org/')))
 })
 
-test('with a key, Pexels is used', async () => {
-  const fetchImpl = stubFetch((url) => jsonResponse(url.includes('pexels') ? PEXELS_BODY : OPENVERSE_BODY))
-  const found = await findBackground({ queries: ['calm lake'], dateISO: '2026-10-05', pexelsApiKey: 'k', fetchImpl })
-  assert.equal(found.provider, 'pexels')
-  assert.equal(found.ranked[0].sourceId, 'pexels:7')
+const isPixabay = (url) => url.startsWith('https://pixabay.com/api/')
+
+test('with a key, Pixabay is called first and used', async () => {
+  const fetchImpl = stubFetch((url) => jsonResponse(isPixabay(url) ? PIXABAY_BODY : OPENVERSE_BODY))
+  const found = await findBackground({ queries: ['calm lake'], dateISO: '2026-10-05', pixabayApiKey: SENTINEL_KEY, fetchImpl })
+  assert.ok(isPixabay(fetchImpl.calls[0].url))
+  assert.equal(fetchImpl.calls.length, 1)
+  assert.equal(found.provider, 'pixabay')
+  assert.equal(found.ranked[0].sourceId, 'pixabay:7')
 })
 
-test('a failing Pexels falls back to Openverse', async () => {
-  const fetchImpl = stubFetch((url) => (url.includes('pexels') ? jsonResponse({}, 401) : jsonResponse(OPENVERSE_BODY)))
-  const found = await findBackground({ queries: ['calm lake'], dateISO: '2026-10-05', pexelsApiKey: 'bad', fetchImpl })
+test('a Pixabay pick records its attribution', async () => {
+  const fetchImpl = stubFetch(() => jsonResponse(PIXABAY_BODY))
+  const found = await findBackground({ queries: ['calm lake'], dateISO: '2026-10-05', pixabayApiKey: SENTINEL_KEY, fetchImpl })
+  const a = buildAttribution(found.ranked[0], { query: found.query, fetchedAt: '2026-10-05T00:00:00.000Z' })
+  assert.deepEqual(a, {
+    provider: 'pixabay',
+    sourceId: 'pixabay:7',
+    sourceUrl: 'https://pixabay.com/photos/lake-7/',
+    imageUrl: 'https://pixabay.com/get/7_1280.jpg',
+    creator: 'P',
+    creatorUrl: 'https://pixabay.com/users/P-3/',
+    license: 'Pixabay Content License',
+    licenseUrl: 'https://pixabay.com/service/license-summary/',
+    query: 'calm lake',
+    fetchedAt: '2026-10-05T00:00:00.000Z',
+  })
+  assert.equal(`stock:${a.provider}`, 'stock:pixabay')
+  assert.ok(!JSON.stringify(a).includes(SENTINEL_KEY))
+})
+
+for (const status of [400, 401, 429]) {
+  test(`a Pixabay HTTP ${status} falls back to Openverse and logs no key`, async () => {
+    const lines = []
+    const fetchImpl = stubFetch((url) => (isPixabay(url) ? jsonResponse({}, status) : jsonResponse(OPENVERSE_BODY)))
+    const found = await findBackground({
+      queries: ['calm lake'], dateISO: '2026-10-05', pixabayApiKey: SENTINEL_KEY, fetchImpl, log: (l) => lines.push(l),
+    })
+    assert.equal(found.provider, 'openverse')
+    assert.ok(lines.some((l) => l.includes(`HTTP ${status}`) && l.includes('skipping pixabay')), lines.join('\n'))
+    for (const l of lines) assert.ok(!l.includes(SENTINEL_KEY), l)
+  })
+}
+
+test('a Pixabay network error falls back to Openverse and logs no key', async () => {
+  const lines = []
+  const fetchImpl = stubFetch((url) => {
+    if (isPixabay(url)) throw new Error(`connect ETIMEDOUT ${url}`)
+    return jsonResponse(OPENVERSE_BODY)
+  })
+  const found = await findBackground({
+    queries: ['calm lake'], dateISO: '2026-10-05', pixabayApiKey: SENTINEL_KEY, fetchImpl, log: (l) => lines.push(l),
+  })
   assert.equal(found.provider, 'openverse')
+  for (const l of lines) assert.ok(!l.includes(SENTINEL_KEY), l)
+})
+
+test('a Pixabay response with no usable hits falls through to Openverse', async () => {
+  const fetchImpl = stubFetch((url) => jsonResponse(isPixabay(url) ? { hits: [] } : OPENVERSE_BODY))
+  const found = await findBackground({ queries: ['calm lake'], dateISO: '2026-10-05', pixabayApiKey: SENTINEL_KEY, fetchImpl })
+  assert.equal(found.provider, 'openverse')
+  assert.ok(isPixabay(fetchImpl.calls[0].url))
+})
+
+test('unreadable Pixabay JSON falls back to Openverse', async () => {
+  const fetchImpl = stubFetch((url) => (isPixabay(url)
+    ? { ok: true, status: 200, json: async () => { throw new Error('Unexpected token <') } }
+    : jsonResponse(OPENVERSE_BODY)))
+  const found = await findBackground({ queries: ['calm lake'], dateISO: '2026-10-05', pixabayApiKey: SENTINEL_KEY, fetchImpl })
+  assert.equal(found.provider, 'openverse')
+})
+
+test('the Pixabay key is never sent to Openverse', async () => {
+  const fetchImpl = stubFetch((url) => (isPixabay(url) ? jsonResponse({}, 429) : jsonResponse(OPENVERSE_BODY)))
+  await findBackground({ queries: ['calm lake'], dateISO: '2026-10-05', pixabayApiKey: SENTINEL_KEY, fetchImpl })
+  for (const c of fetchImpl.calls.filter((x) => !isPixabay(x.url))) {
+    assert.ok(!c.url.includes(SENTINEL_KEY))
+    assert.ok(!JSON.stringify(c.init?.headers ?? {}).includes(SENTINEL_KEY))
+  }
+})
+
+test('a Pixabay hit with a recent sourceId is skipped by the no-repeat filter', async () => {
+  const fetchImpl = stubFetch((url) => (isPixabay(url) ? jsonResponse(PIXABAY_BODY) : jsonResponse(OPENVERSE_BODY)))
+  const found = await findBackground({
+    queries: ['calm lake'], dateISO: '2026-10-05', recentIds: ['pixabay:7'], pixabayApiKey: SENTINEL_KEY, fetchImpl,
+  })
+  assert.equal(found.provider, 'openverse')
+})
+
+test('Pixabay downloads may be upscaled from 720px; others must cover 1080px', () => {
+  assert.equal(minShortSide('pixabay'), 720)
+  assert.equal(minShortSide('openverse'), 1080)
 })
 
 test('an empty query widens to the next one', async () => {
@@ -303,7 +454,7 @@ test('an empty query widens to the next one', async () => {
 
 test('null when every provider fails or returns nothing usable', async () => {
   const down = stubFetch(() => { throw new Error('ENOTFOUND') })
-  assert.equal(await findBackground({ queries: ['a'], dateISO: '2026-10-05', pexelsApiKey: 'k', fetchImpl: down }), null)
+  assert.equal(await findBackground({ queries: ['a'], dateISO: '2026-10-05', pixabayApiKey: SENTINEL_KEY, fetchImpl: down }), null)
   const people = stubFetch(() => jsonResponse({ results: [{ ...OPENVERSE_BODY.results[0], title: 'Man on a hill' }] }))
   assert.equal(await findBackground({ queries: ['a'], dateISO: '2026-10-05', fetchImpl: people }), null)
 })

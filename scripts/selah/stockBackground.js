@@ -4,33 +4,36 @@
 //
 // No filesystem and no Supabase. The only network access is through an
 // injected `fetchImpl`, so every path — including provider failure and the
-// Pexels-to-Openverse fallback — is tested with stubs (npm run background:test).
+// Pixabay-to-Openverse fallback — is tested with stubs (npm run background:test).
 //
 // LICENSING IS THE POINT OF THIS FILE. Only photos whose licence allows free
-// commercial use without asking are ever accepted: the Pexels License, CC0 and
-// the Public Domain Mark. CC-BY is refused even though it is "free", because it
+// commercial use without asking are ever accepted: the Pixabay Content License,
+// CC0 and the Public Domain Mark. CC-BY is refused even though it is "free", because it
 // requires a credit on every shared card, and the 1080x1920 card carries none.
 // Never widen ALLOWED_LICENSES without solving that first.
 
-import { assertValidDate, dayIndex, themeForDate, IMAGE_WIDTH } from './background.js'
+import { assertValidDate, dayIndex, themeForDate, IMAGE_WIDTH, IMAGE_HEIGHT } from './background.js'
 
-export const PEXELS_SEARCH_URL = 'https://api.pexels.com/v1/search'
+export const PIXABAY_SEARCH_URL = 'https://pixabay.com/api/'
 export const OPENVERSE_SEARCH_URL = 'https://api.openverse.org/v1/images/'
 export const USER_AGENT = 'SELAH-daily-background/1.0'
 
 /** provider id -> licence ids it may return that we accept. */
 export const ALLOWED_LICENSES = {
-  pexels: ['pexels'],
+  pixabay: ['pixabay content license'],
   openverse: ['cc0', 'pdm'],
 }
 
 const LICENSE_URLS = {
-  pexels: 'https://www.pexels.com/license/',
+  pixabay: 'https://pixabay.com/service/license-summary/',
   cc0: 'https://creativecommons.org/publicdomain/zero/1.0/',
   pdm: 'https://creativecommons.org/publicdomain/mark/1.0/',
 }
 
-const PROVIDER_LABELS = { pexels: 'Pexels', openverse: 'Openverse' }
+const PROVIDER_LABELS = { pixabay: 'Pixabay', openverse: 'Openverse' }
+
+/** Pixabay's licence as recorded in the attribution. */
+export const PIXABAY_LICENSE = 'Pixabay Content License'
 
 /** How many past days a photo may not be reused within. */
 export const NO_REPEAT_DAYS = 30
@@ -183,21 +186,22 @@ export function buildImageQuery(devotion, dateISO) {
 //     licenseUrl, width, height, text }
 // `text` is everything descriptive the provider gave us, for the deny-list.
 
-export function normalizePexels(json) {
-  return (json?.photos ?? []).map((p) => ({
-    provider: 'pexels',
-    sourceId: `pexels:${p.id}`,
-    // The original can be 6000px and 20 MB. Pexels resizes on the CDN; 2400 on
-    // the long side is enough for a 1920-tall cover crop.
-    imageUrl: p.src?.original ? `${p.src.original}?auto=compress&cs=tinysrgb&h=2400` : null,
-    sourceUrl: p.url ?? null,
-    creator: p.photographer ?? null,
-    creatorUrl: p.photographer_url ?? null,
-    license: 'pexels',
-    licenseUrl: LICENSE_URLS.pexels,
-    width: p.width ?? null,
-    height: p.height ?? null,
-    text: [p.alt].filter(Boolean).join(' '),
+export function normalizePixabay(json) {
+  return (json?.hits ?? []).map((h) => ({
+    provider: 'pixabay',
+    sourceId: `pixabay:${h.id}`,
+    // largeImageURL is the biggest size open to every key (1280px on the long
+    // side). It is downloaded and re-hosted, never hotlinked.
+    imageUrl: h.largeImageURL ?? null,
+    sourceUrl: h.pageURL ?? null,
+    creator: h.user ?? null,
+    creatorUrl: h.user && h.user_id ? `https://pixabay.com/users/${h.user}-${h.user_id}/` : null,
+    license: PIXABAY_LICENSE,
+    licenseUrl: LICENSE_URLS.pixabay,
+    // The original's size, which the search's min_width/min_height filter on.
+    width: h.imageWidth ?? null,
+    height: h.imageHeight ?? null,
+    text: h.tags ?? '',
   }))
 }
 
@@ -241,6 +245,18 @@ export function deniedWord(text) {
 /** Short side in pixels must cover the card's width without upscaling. */
 export function isLargeEnough(width, height) {
   return Math.min(width, height) >= IMAGE_WIDTH
+}
+
+/**
+ * Smallest short side a downloaded file may have. Pixabay serves at most
+ * 1280px on the long side without full API access, so a portrait arrives
+ * 720-853px wide and is upscaled to the card's width; every other provider's
+ * file must already cover it.
+ */
+export const PIXABAY_MIN_SHORT_SIDE = 720
+
+export function minShortSide(provider) {
+  return provider === 'pixabay' ? PIXABAY_MIN_SHORT_SIDE : IMAGE_WIDTH
 }
 
 /**
@@ -302,7 +318,7 @@ export function buildAttribution(candidate, { query, fetchedAt = new Date().toIS
   }
 }
 
-/** "Photo: Jane Doe · Pexels" */
+/** "Photo: Jane Doe · Pixabay" */
 export function creditLine(attribution) {
   if (!attribution) return null
   const provider = PROVIDER_LABELS[attribution.provider] ?? attribution.provider
@@ -319,28 +335,53 @@ export class ProviderError extends Error {
   }
 }
 
-async function getJson(fetchImpl, url, headers, provider, timeoutMs) {
+const STATUS_HINTS = { 400: 'bad request', 401: 'key rejected', 403: 'key rejected', 429: 'rate limited' }
+
+/**
+ * Strips a secret, and any `key=` URL parameter, from a message. Pixabay takes
+ * its key in the query string, so an error that quotes the request URL would
+ * otherwise print it.
+ */
+export function redact(message, secret) {
+  let out = String(message ?? '')
+  if (secret) out = out.split(secret).join('[redacted]')
+  return out.replace(/([?&]key=)[^&\s"']*/gi, '$1[redacted]')
+}
+
+async function getJson(fetchImpl, url, headers, provider, timeoutMs, secret = null) {
   let res
   try {
     res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(timeoutMs) })
   } catch (err) {
-    throw new ProviderError(`${provider} request failed: ${err.message}`, provider)
+    throw new ProviderError(redact(`${provider} request failed: ${err.message}`, secret), provider)
   }
-  if (!res.ok) throw new ProviderError(`${provider} returned HTTP ${res.status}`, provider)
+  if (!res.ok) {
+    const hint = STATUS_HINTS[res.status]
+    throw new ProviderError(`${provider} returned HTTP ${res.status}${hint ? ` (${hint})` : ''}`, provider)
+  }
   try {
     return await res.json()
   } catch (err) {
-    throw new ProviderError(`${provider} returned unreadable JSON: ${err.message}`, provider)
+    throw new ProviderError(redact(`${provider} returned unreadable JSON: ${err.message}`, secret), provider)
   }
 }
 
-export async function searchPexels(query, { apiKey, fetchImpl = fetch, timeoutMs = 15000 } = {}) {
-  const url = new URL(PEXELS_SEARCH_URL)
+export async function searchPixabay(query, { apiKey, fetchImpl = fetch, timeoutMs = 15000 } = {}) {
+  const url = new URL(PIXABAY_SEARCH_URL)
+  // Pixabay takes the key only as a query parameter: never log this URL.
   url.search = new URLSearchParams({
-    query, orientation: 'portrait', size: 'large', per_page: '30',
+    key: apiKey,
+    q: String(query).slice(0, 100),
+    image_type: 'photo',
+    orientation: 'vertical',
+    safesearch: 'true',
+    order: 'popular',
+    per_page: '50',
+    min_width: String(IMAGE_WIDTH),
+    min_height: String(IMAGE_HEIGHT),
   }).toString()
-  const json = await getJson(fetchImpl, url, { Authorization: apiKey, 'User-Agent': USER_AGENT }, 'pexels', timeoutMs)
-  return normalizePexels(json)
+  const json = await getJson(fetchImpl, url, { 'User-Agent': USER_AGENT }, 'pixabay', timeoutMs, apiKey)
+  return normalizePixabay(json)
 }
 
 export async function searchOpenverse(query, { fetchImpl = fetch, timeoutMs = 15000 } = {}) {
@@ -358,19 +399,19 @@ export async function searchOpenverse(query, { fetchImpl = fetch, timeoutMs = 15
 }
 
 /**
- * Finds the day's photo: Pexels when a key is set, then Openverse, trying each
+ * Finds the day's photo: Pixabay when a key is set, then Openverse, trying each
  * query from most to least specific until one returns a usable candidate.
  *
- * A provider that errors is skipped, not fatal — a dead Pexels key must still
+ * A provider that errors is skipped, not fatal — a dead Pixabay key must still
  * leave the keyless path working.
  *
  * @returns {Promise<{provider: string, query: string, ranked: object[]} | null>}
  */
 export async function findBackground({
-  queries, dateISO, recentIds = [], pexelsApiKey = null, fetchImpl = fetch, log = () => {},
+  queries, dateISO, recentIds = [], pixabayApiKey = null, fetchImpl = fetch, log = () => {},
 }) {
   const providers = []
-  if (pexelsApiKey) providers.push(['pexels', (q) => searchPexels(q, { apiKey: pexelsApiKey, fetchImpl })])
+  if (pixabayApiKey) providers.push(['pixabay', (q) => searchPixabay(q, { apiKey: pixabayApiKey, fetchImpl })])
   providers.push(['openverse', (q) => searchOpenverse(q, { fetchImpl })])
 
   for (const [provider, search] of providers) {
@@ -379,7 +420,7 @@ export async function findBackground({
       try {
         candidates = await search(query)
       } catch (err) {
-        log(`${err.message} — skipping ${provider}`)
+        log(redact(`${err.message} — skipping ${provider}`, pixabayApiKey))
         break
       }
       const ranked = rankCandidates(candidates, dateISO, recentIds)

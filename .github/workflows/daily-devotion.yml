@@ -2,7 +2,7 @@ name: Daily devotion
 
 # Generates one SELAH devotion for the day and writes it to Supabase, then
 # fetches the day's verse-card background: a freely-licensed stock photo
-# (Pexels License, CC0 or Public Domain Mark) whose search keywords come from
+# (Pixabay Content License, CC0 or Public Domain Mark) whose search keywords come from
 # that devotion. scripts/fetch-daily-background.js resizes it to 1080x1920
 # WebP, stores it in Firebase Storage and records it, with the photographer
 # credit, in daily_backgrounds. The background step never fails the job: a
@@ -26,7 +26,7 @@ name: Daily devotion
 #   FIREBASE_STORAGE_BUCKET     e.g. devotional-app-c2633.firebasestorage.app
 #
 # Optional:
-#   PEXELS_API_KEY              pexels.com/api. Without it the background step
+#   PIXABAY_API_KEY             pixabay.com/api/docs. Without it the background step
 #                               searches Openverse, which needs no key.
 
 on:
@@ -167,7 +167,7 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_STORAGE_BUCKET: ${{ secrets.FIREBASE_STORAGE_BUCKET }}
-          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
         run: |
           ARGS=""
           [ -n "${{ inputs.date }}" ] && ARGS="$ARGS --date ${{ inputs.date }}"

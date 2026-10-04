@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs'
 const KEYS = [
   'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY',
   'FIREBASE_SERVICE_ACCOUNT', 'FIREBASE_STORAGE_BUCKET',
-  'BRIDGE_URL', 'BACKGROUND_MODEL', 'GEMINI_API_KEY', 'PEXELS_API_KEY',
+  'BRIDGE_URL', 'BACKGROUND_MODEL', 'GEMINI_API_KEY', 'PIXABAY_API_KEY',
 ]
 
 export function loadEnv(extraKeys = []) {

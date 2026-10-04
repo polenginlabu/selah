@@ -340,9 +340,9 @@ export function VerseCardSheet({ selection, translation, onClose }) {
   )
 }
 
-const PHOTO_PROVIDERS = { pexels: 'Pexels', openverse: 'Openverse' }
+const PHOTO_PROVIDERS = { pixabay: 'Pixabay', openverse: 'Openverse' }
 
-/** "Photo: Jane Doe · Pexels" — matches creditLine() in scripts/selah/stockBackground.js. */
+/** "Photo: Jane Doe · Pixabay" — matches creditLine() in scripts/selah/stockBackground.js. */
 function photoCredit(attribution) {
   const provider = PHOTO_PROVIDERS[attribution.provider] ?? attribution.provider
   return `Photo: ${attribution.creator || 'Unknown'} · ${provider}`
