@@ -314,6 +314,15 @@ export function VerseCardSheet({ selection, translation, onClose }) {
                 )
               })}
             </div>
+            {selectedBackground?.attribution && (
+              <p className="mt-1 text-xs text-muted">
+                {/^https:\/\//.test(selectedBackground.attribution.sourceUrl ?? '') ? (
+                  <a href={selectedBackground.attribution.sourceUrl} target="_blank" rel="noopener noreferrer" className="underline">
+                    {photoCredit(selectedBackground.attribution)}
+                  </a>
+                ) : photoCredit(selectedBackground.attribution)}
+              </p>
+            )}
           </div>
         )}
 
@@ -329,6 +338,14 @@ export function VerseCardSheet({ selection, translation, onClose }) {
       </div>
     </BibleReaderSheet>
   )
+}
+
+const PHOTO_PROVIDERS = { pexels: 'Pexels', openverse: 'Openverse' }
+
+/** "Photo: Jane Doe · Pexels" — matches creditLine() in scripts/selah/stockBackground.js. */
+function photoCredit(attribution) {
+  const provider = PHOTO_PROVIDERS[attribution.provider] ?? attribution.provider
+  return `Photo: ${attribution.creator || 'Unknown'} · ${provider}`
 }
 
 function download(blob, filename) {

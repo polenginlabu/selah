@@ -204,15 +204,21 @@ export function assertUsableImage(buffer) {
   return type
 }
 
-/** The daily_backgrounds row. Mirrors toRow() in devotion.js. */
+/**
+ * The daily_backgrounds row. Mirrors toRow() in devotion.js.
+ *
+ * `attribution` (stock photos only) is added to the row only when given, so
+ * generated and hand-uploaded rows keep exactly their existing shape.
+ */
 export function toBackgroundRow({
-  date, storagePath, imageUrl, theme, prompt, model, width, height, bytes,
+  date, storagePath, imageUrl, theme, prompt, model, width, height, bytes, attribution,
 }) {
   assertValidDate(date)
   if (!storagePath) throw new BackgroundError('storagePath is required.', 'shape')
   if (!imageUrl) throw new BackgroundError('imageUrl is required.', 'shape')
   if (!theme) throw new BackgroundError('theme is required.', 'shape')
   return {
+    ...(attribution ? { attribution } : {}),
     date,
     storage_path: storagePath,
     image_url: imageUrl,

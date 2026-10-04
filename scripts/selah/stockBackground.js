@@ -1,0 +1,410 @@
+// Logic for the SELAH daily background when it comes from stock photography
+// rather than an image model: which words to search for, which results are
+// allowed, which one a date gets, and the credit that goes with it.
+//
+// No filesystem and no Supabase. The only network access is through an
+// injected `fetchImpl`, so every path — including provider failure and the
+// Pexels-to-Openverse fallback — is tested with stubs (npm run background:test).
+//
+// LICENSING IS THE POINT OF THIS FILE. Only photos whose licence allows free
+// commercial use without asking are ever accepted: the Pexels License, CC0 and
+// the Public Domain Mark. CC-BY is refused even though it is "free", because it
+// requires a credit on every shared card, and the 1080x1920 card carries none.
+// Never widen ALLOWED_LICENSES without solving that first.
+
+import { assertValidDate, dayIndex, themeForDate, IMAGE_WIDTH } from './background.js'
+
+export const PEXELS_SEARCH_URL = 'https://api.pexels.com/v1/search'
+export const OPENVERSE_SEARCH_URL = 'https://api.openverse.org/v1/images/'
+export const USER_AGENT = 'SELAH-daily-background/1.0'
+
+/** provider id -> licence ids it may return that we accept. */
+export const ALLOWED_LICENSES = {
+  pexels: ['pexels'],
+  openverse: ['cc0', 'pdm'],
+}
+
+const LICENSE_URLS = {
+  pexels: 'https://www.pexels.com/license/',
+  cc0: 'https://creativecommons.org/publicdomain/zero/1.0/',
+  pdm: 'https://creativecommons.org/publicdomain/mark/1.0/',
+}
+
+const PROVIDER_LABELS = { pexels: 'Pexels', openverse: 'Openverse' }
+
+/** How many past days a photo may not be reused within. */
+export const NO_REPEAT_DAYS = 30
+
+/**
+ * Visual search phrases for each theme, devotion palette and background
+ * rotation alike. Abstract words ("grace", "faith") return stock photos of
+ * people praying or holding hands, so each theme is translated into the
+ * landscape or light that carries its mood instead.
+ */
+export const THEME_QUERIES = {
+  peace: 'calm lake mist',
+  joy: 'sunlit meadow flowers',
+  hope: 'sunrise over hills',
+  faith: 'light through clouds',
+  gratitude: 'golden wheat field',
+  rest: 'quiet forest stream',
+  courage: 'mountain peak dawn',
+  stillness: 'still lake reflection',
+  grace: 'soft sunlight clouds',
+  light: 'sun rays forest',
+  renewal: 'spring leaves dew',
+  trust: 'calm sea horizon',
+  wisdom: 'old tree mountain',
+  "god's creation": 'mountain valley landscape',
+  morning: 'morning mist field',
+  evening: 'evening sky sunset',
+  mountains: 'misty mountains',
+  ocean: 'ocean waves shore',
+  forest: 'forest light trees',
+  sky: 'blue sky clouds',
+  sunrise: 'sunrise landscape',
+  'gentle rain': 'rain drops leaves',
+}
+
+/** Last resort when nothing more specific returns a usable photo. */
+export const GENERIC_QUERY = 'nature landscape sunrise'
+
+/**
+ * Nature words worth lifting straight out of the devotion text. Scripture is
+ * full of them ("He leads me beside still waters"), and a photo of the actual
+ * image in the day's verse is the closest match a keyword search can make.
+ * Keys are what appears in text; values are the search word.
+ */
+export const NATURE_VOCAB = {
+  mountain: 'mountain', mountains: 'mountain', hill: 'hills', hills: 'hills',
+  sea: 'sea', seas: 'sea', ocean: 'ocean', waves: 'waves', shore: 'shore',
+  river: 'river', rivers: 'river', stream: 'stream', streams: 'stream',
+  waters: 'lake', lake: 'lake', rain: 'rain', storm: 'storm', storms: 'storm',
+  wind: 'wind', cloud: 'clouds', clouds: 'clouds', sky: 'sky', heavens: 'sky',
+  stars: 'stars', star: 'stars', sun: 'sun', sunrise: 'sunrise', dawn: 'dawn',
+  morning: 'morning', evening: 'sunset', sunset: 'sunset', night: 'night sky',
+  light: 'light', forest: 'forest', tree: 'tree', trees: 'trees',
+  field: 'field', fields: 'field', meadow: 'meadow', pasture: 'meadow',
+  pastures: 'meadow', valley: 'valley', desert: 'desert', wilderness: 'desert',
+  garden: 'garden', flower: 'flowers', flowers: 'flowers', seed: 'seedling',
+  harvest: 'wheat field', wheat: 'wheat field', vine: 'vineyard', snow: 'snow',
+  path: 'path', road: 'path', rock: 'rocks', spring: 'spring',
+}
+
+/**
+ * Words that disqualify a result when they appear in its title, alt text or
+ * tags: people and faces, anything with lettering, and other faiths' imagery.
+ * Matched as whole words, so "manor" does not trip "man".
+ */
+export const DENY_WORDS = [
+  // people
+  'person', 'people', 'man', 'men', 'woman', 'women', 'boy', 'boys', 'girl', 'girls',
+  'child', 'children', 'kid', 'kids', 'baby', 'face', 'faces', 'portrait', 'selfie',
+  'crowd', 'couple', 'family', 'hand', 'hands', 'model', 'bride', 'groom', 'wedding',
+  'human', 'tourist', 'hiker', 'silhouette', 'nude',
+  // lettering
+  'text', 'sign', 'signage', 'logo', 'letter', 'letters', 'word', 'words',
+  'typography', 'quote', 'poster', 'book', 'bible', 'newspaper', 'graffiti',
+  'banner', 'watermark', 'menu', 'label',
+  // other faiths and the occult
+  'buddha', 'buddhist', 'buddhism', 'temple', 'mosque', 'hindu', 'hinduism', 'shrine',
+  'pagoda', 'idol', 'deity', 'ganesh', 'shiva', 'torii', 'islam', 'islamic', 'allah',
+  'zen', 'mandala', 'yoga', 'monk', 'stupa', 'tarot', 'occult', 'witch', 'pagan',
+  'halloween', 'skull',
+]
+
+const DENY_SET = new Set(DENY_WORDS)
+
+function words(text) {
+  return String(text ?? '').toLowerCase().match(/[a-z']+/g) ?? []
+}
+
+function themeKey(value) {
+  return String(value ?? '').trim().toLowerCase()
+}
+
+/**
+ * The searches to try for a day, most specific first, each 2-4 keywords.
+ *
+ * Several rather than one because keyword search ANDs its terms: a precise
+ * four-word query can return nothing on a small CC0 index, and the job should
+ * then widen rather than give up. Deterministic for the same devotion.
+ *
+ * @param {object|null} devotion  {title, topicLabel, theme, themeLabel, keyScripture, keyScriptureText, thought}
+ * @param {string} dateISO        used for the theme when there is no devotion
+ * @returns {string[]}
+ */
+export function buildImageQueries(devotion, dateISO) {
+  assertValidDate(dateISO)
+  const theme = themeKey(devotion?.theme) || themeKey(devotion?.themeLabel) || themeForDate(dateISO).theme
+  // hasOwn, not a bare lookup: "constructor" in a devotion must not resolve to
+  // Object.prototype.constructor.
+  const themePhrase = Object.hasOwn(THEME_QUERIES, theme)
+    ? THEME_QUERIES[theme]
+    : THEME_QUERIES[themeForDate(dateISO).theme.toLowerCase()]
+
+  // Title and verse first: they are the most deliberate words of the day.
+  const text = [
+    devotion?.title, devotion?.keyScriptureText, devotion?.topicLabel, devotion?.thought,
+  ].filter(Boolean).join(' ')
+  const found = []
+  for (const w of words(text)) {
+    const mapped = Object.hasOwn(NATURE_VOCAB, w) ? NATURE_VOCAB[w] : null
+    if (mapped && !found.includes(mapped)) found.push(mapped)
+    if (found.length === 2) break
+  }
+
+  const themeWords = themePhrase.split(' ')
+  const queries = []
+  if (found.length) {
+    // Some vocabulary maps to two words ("wheat field"), so count words, not entries.
+    const combined = [...new Set(found.join(' ').split(' '))].slice(0, 4)
+    for (const w of themeWords) {
+      if (combined.length >= 4) break
+      if (!combined.includes(w)) combined.push(w)
+    }
+    if (combined.length < 2) combined.push('landscape')
+    queries.push(combined.join(' '))
+    queries.push(`${found[0]} landscape`)
+  }
+  queries.push(themePhrase)
+  queries.push(GENERIC_QUERY)
+  return [...new Set(queries)]
+}
+
+export function buildImageQuery(devotion, dateISO) {
+  return buildImageQueries(devotion, dateISO)[0]
+}
+
+// --- Candidates ------------------------------------------------------------
+//
+// One shape for both providers:
+//   { provider, sourceId, imageUrl, sourceUrl, creator, creatorUrl, license,
+//     licenseUrl, width, height, text }
+// `text` is everything descriptive the provider gave us, for the deny-list.
+
+export function normalizePexels(json) {
+  return (json?.photos ?? []).map((p) => ({
+    provider: 'pexels',
+    sourceId: `pexels:${p.id}`,
+    // The original can be 6000px and 20 MB. Pexels resizes on the CDN; 2400 on
+    // the long side is enough for a 1920-tall cover crop.
+    imageUrl: p.src?.original ? `${p.src.original}?auto=compress&cs=tinysrgb&h=2400` : null,
+    sourceUrl: p.url ?? null,
+    creator: p.photographer ?? null,
+    creatorUrl: p.photographer_url ?? null,
+    license: 'pexels',
+    licenseUrl: LICENSE_URLS.pexels,
+    width: p.width ?? null,
+    height: p.height ?? null,
+    text: [p.alt].filter(Boolean).join(' '),
+  }))
+}
+
+export function normalizeOpenverse(json) {
+  return (json?.results ?? []).map((r) => {
+    const license = String(r.license ?? '').toLowerCase()
+    return {
+      provider: 'openverse',
+      sourceId: `openverse:${r.id}`,
+      imageUrl: r.url ?? null,
+      sourceUrl: r.foreign_landing_url ?? null,
+      creator: r.creator ?? null,
+      creatorUrl: r.creator_url ?? null,
+      license,
+      licenseUrl: r.license_url ?? LICENSE_URLS[license] ?? null,
+      width: r.width ?? null,
+      height: r.height ?? null,
+      mature: r.mature === true,
+      text: [r.title, ...(r.tags ?? []).map((t) => t?.name)].filter(Boolean).join(' '),
+    }
+  })
+}
+
+export function isAllowedLicense(provider, license) {
+  return (ALLOWED_LICENSES[provider] ?? []).includes(String(license ?? '').toLowerCase())
+}
+
+function isHttps(url) {
+  try {
+    return new URL(url).protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+/** The first deny-listed word in a candidate's description, or null. */
+export function deniedWord(text) {
+  return words(text).find((w) => DENY_SET.has(w)) ?? null
+}
+
+/** Short side in pixels must cover the card's width without upscaling. */
+export function isLargeEnough(width, height) {
+  return Math.min(width, height) >= IMAGE_WIDTH
+}
+
+/**
+ * Why a candidate is unusable, or null if it is fine. Dimensions the provider
+ * did not report are let through here and checked on the downloaded bytes.
+ */
+export function rejectionReason(c) {
+  if (!c?.imageUrl || !isHttps(c.imageUrl)) return 'not https'
+  if (!isAllowedLicense(c.provider, c.license)) return `licence ${c.license || 'unknown'}`
+  if (c.mature) return 'mature'
+  const word = deniedWord(c.text)
+  if (word) return `mentions "${word}"`
+  if (c.width && c.height && !isLargeEnough(c.width, c.height)) return 'too small'
+  return null
+}
+
+export function isSuitableCandidate(c) {
+  return rejectionReason(c) === null
+}
+
+/**
+ * Usable candidates in the order to try them for a date.
+ *
+ * Sorted by id first so the provider's ranking churn does not change a date's
+ * pick between runs, then rotated so the date's seeded choice comes first. The
+ * rest follow in order, for when the first one fails to download.
+ *
+ * @param {string[]} recentIds sourceIds used in the last NO_REPEAT_DAYS days
+ */
+export function rankCandidates(candidates, dateISO, recentIds = []) {
+  const recent = new Set(recentIds)
+  const usable = candidates
+    .filter((c) => isSuitableCandidate(c) && !recent.has(c.sourceId))
+    .sort((a, b) => (a.sourceId < b.sourceId ? -1 : a.sourceId > b.sourceId ? 1 : 0))
+  if (!usable.length) return []
+  const start = ((dayIndex(dateISO) % usable.length) + usable.length) % usable.length
+  return [...usable.slice(start), ...usable.slice(0, start)]
+}
+
+export function pickCandidate(candidates, dateISO, recentIds = []) {
+  return rankCandidates(candidates, dateISO, recentIds)[0] ?? null
+}
+
+// --- Attribution -----------------------------------------------------------
+
+/** The record kept on the daily_backgrounds row (attribution jsonb). */
+export function buildAttribution(candidate, { query, fetchedAt = new Date().toISOString() } = {}) {
+  return {
+    provider: candidate.provider,
+    sourceId: candidate.sourceId,
+    sourceUrl: candidate.sourceUrl ?? null,
+    imageUrl: candidate.imageUrl,
+    creator: candidate.creator ?? null,
+    creatorUrl: candidate.creatorUrl ?? null,
+    license: candidate.license,
+    licenseUrl: candidate.licenseUrl ?? null,
+    query: query ?? null,
+    fetchedAt,
+  }
+}
+
+/** "Photo: Jane Doe · Pexels" */
+export function creditLine(attribution) {
+  if (!attribution) return null
+  const provider = PROVIDER_LABELS[attribution.provider] ?? attribution.provider
+  return `Photo: ${attribution.creator || 'Unknown'} · ${provider}`
+}
+
+// --- Providers -------------------------------------------------------------
+
+export class ProviderError extends Error {
+  constructor(message, provider) {
+    super(message)
+    this.name = 'ProviderError'
+    this.provider = provider
+  }
+}
+
+async function getJson(fetchImpl, url, headers, provider, timeoutMs) {
+  let res
+  try {
+    res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(timeoutMs) })
+  } catch (err) {
+    throw new ProviderError(`${provider} request failed: ${err.message}`, provider)
+  }
+  if (!res.ok) throw new ProviderError(`${provider} returned HTTP ${res.status}`, provider)
+  try {
+    return await res.json()
+  } catch (err) {
+    throw new ProviderError(`${provider} returned unreadable JSON: ${err.message}`, provider)
+  }
+}
+
+export async function searchPexels(query, { apiKey, fetchImpl = fetch, timeoutMs = 15000 } = {}) {
+  const url = new URL(PEXELS_SEARCH_URL)
+  url.search = new URLSearchParams({
+    query, orientation: 'portrait', size: 'large', per_page: '30',
+  }).toString()
+  const json = await getJson(fetchImpl, url, { Authorization: apiKey, 'User-Agent': USER_AGENT }, 'pexels', timeoutMs)
+  return normalizePexels(json)
+}
+
+export async function searchOpenverse(query, { fetchImpl = fetch, timeoutMs = 15000 } = {}) {
+  const url = new URL(OPENVERSE_SEARCH_URL)
+  url.search = new URLSearchParams({
+    q: query,
+    license: ALLOWED_LICENSES.openverse.join(','),
+    category: 'photograph',
+    size: 'large',
+    mature: 'false',
+    page_size: '20',
+  }).toString()
+  const json = await getJson(fetchImpl, url, { 'User-Agent': USER_AGENT }, 'openverse', timeoutMs)
+  return normalizeOpenverse(json)
+}
+
+/**
+ * Finds the day's photo: Pexels when a key is set, then Openverse, trying each
+ * query from most to least specific until one returns a usable candidate.
+ *
+ * A provider that errors is skipped, not fatal — a dead Pexels key must still
+ * leave the keyless path working.
+ *
+ * @returns {Promise<{provider: string, query: string, ranked: object[]} | null>}
+ */
+export async function findBackground({
+  queries, dateISO, recentIds = [], pexelsApiKey = null, fetchImpl = fetch, log = () => {},
+}) {
+  const providers = []
+  if (pexelsApiKey) providers.push(['pexels', (q) => searchPexels(q, { apiKey: pexelsApiKey, fetchImpl })])
+  providers.push(['openverse', (q) => searchOpenverse(q, { fetchImpl })])
+
+  for (const [provider, search] of providers) {
+    for (const query of queries) {
+      let candidates
+      try {
+        candidates = await search(query)
+      } catch (err) {
+        log(`${err.message} — skipping ${provider}`)
+        break
+      }
+      const ranked = rankCandidates(candidates, dateISO, recentIds)
+      log(`${provider} "${query}": ${candidates.length} results, ${ranked.length} usable`)
+      if (ranked.length) return { provider, query, ranked }
+    }
+  }
+  return null
+}
+
+/** Downloads one image with a timeout and a size cap. */
+export async function downloadImage(url, { fetchImpl = fetch, timeoutMs = 30000, maxBytes = 25 * 1024 * 1024 } = {}) {
+  if (!isHttps(url)) throw new ProviderError(`Refusing a non-https image URL: ${url}`, 'download')
+  let res
+  try {
+    res = await fetchImpl(url, {
+      headers: { 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(timeoutMs), redirect: 'follow',
+    })
+  } catch (err) {
+    throw new ProviderError(`Download failed: ${err.message}`, 'download')
+  }
+  if (!res.ok) throw new ProviderError(`Download returned HTTP ${res.status}`, 'download')
+  const declared = Number(res.headers?.get?.('content-length') ?? 0)
+  if (declared > maxBytes) throw new ProviderError(`Image is ${declared} bytes, over the ${maxBytes} cap`, 'download')
+  const buffer = Buffer.from(await res.arrayBuffer())
+  if (buffer.length > maxBytes) throw new ProviderError(`Image is ${buffer.length} bytes, over the ${maxBytes} cap`, 'download')
+  return buffer
+}

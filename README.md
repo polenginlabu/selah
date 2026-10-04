@@ -164,10 +164,12 @@ VITE_ZACKION_CHAT_URL=https://www.zackion-ai.com/api/chat/2c02a09f-82fa-4044-8b6
 | `npm run preview` | Serve the production build locally |
 | `npm run devotion:generate` | Generate and save today's devotion |
 | `npm run devotion:dry-run` | Same, printed instead of saved |
-| `npm run background:generate` | Generate, upload and record today's background image |
+| `npm run background:fetch` | Fetch, upload and record today's stock-photo background |
+| `npm run background:fetch:dry-run` | Same, but uploads and writes nothing |
+| `npm run background:generate` | Generate a background with an image model instead (needs a billed Gemini key) |
 | `npm run background:dry-run` | Same, but uploads and writes nothing |
 | `npm run devotion:test` | Devotion validator and background logic tests |
-| `npm run background:test` | Background theme, prompt and image-guard tests |
+| `npm run background:test` | Background theme, prompt, image-guard and stock-photo selection tests |
 | `npm run card:test` | Verse card typesetting tests |
 | `npm run bible:test` | Bible parser and canonical-book tests |
 
@@ -182,7 +184,7 @@ Supabase tables used by the client:
 | `profiles` | User profile data |
 | `user_stats` | XP, level, streak, totals |
 | `daily_devotions` | Generated daily SELAH devotion per user per day |
-| `daily_backgrounds` | One generated background image per date (metadata only; the image is in Firebase Storage) |
+| `daily_backgrounds` | One background image per date, with stock-photo attribution (metadata only; the image is in Firebase Storage) |
 | `devotions` | Journal entries with verse and translation |
 | `conquest_weeks` | Weekly conquest checklist state |
 | `conquest_recurring` | Recurring conquest task config |
@@ -245,49 +247,68 @@ Select a verse in the Bible reader, tap **Share**, and SELAH renders a 1080×192
 Scripture card: the verse, its reference, the translation, the SELAH wordmark,
 and the day's background image.
 
-> **Automatic generation is currently OFF.** Gemini image generation has no
-> free tier — an unbilled key returns `limit: 0` for every image model — so the
-> nightly step was removed from the workflow rather than failing every morning.
-> Backgrounds are supplied by **`npm run background:upload`** (below), which is
-> how today's got there. Nothing was deleted: `generate-daily-background.js`
-> still works and can be run by hand once billing is enabled. See *Re-enabling
-> automatic generation* at the end of this section.
+Every night, right after the devotion is written, the *Daily devotion* workflow
+fetches that day's background: a **freely-licensed stock photograph** whose
+subject matches the devotion. No image is generated and no browser automation is
+involved — the photo comes from an official image search API with its licence
+metadata attached.
 
 The governing rule of this feature:
 
-> **AI generates the background. SELAH generates the Scripture card.**
+> **The background is a picture. SELAH generates the Scripture card.**
 
-The image model is asked for background art and nothing else — no text, no
-letters, no verses, no typography, no logos, no people. Every glyph on the card
-is drawn by the app from the Bible API's own text. This is not a stylistic
-preference: a model asked to render Scripture produces misspelled,
-mis-attributed, un-selectable verses baked into a JPEG, and nobody downstream
-can correct it. The prohibition is asserted in
-`scripts/selah/background.test.js`, not just written in a prompt.
+Every glyph on the card is drawn by the app from the Bible API's own text.
+Photos with people, faces, lettering, logos or other faiths' religious imagery
+are rejected, so nothing in the background competes with the verse.
 
 ### How it fits together
 
 ```
-Manual, or a nightly Action once billing is enabled
-  └─ scripts/generate-daily-background.js
-       ├─ themeForDate(date)          deterministic theme + light motif
-       ├─ runImageAgent()             OpenCode bridge → Nano Banana 2
+Nightly Action, after the devotion step (or by hand)
+  └─ scripts/fetch-daily-background.js
+       ├─ read daily_devotions        title, verse, theme for the date
+       ├─ buildImageQueries()         2-4 nature keywords, most specific first
+       ├─ Pexels (PEXELS_API_KEY) → Openverse (no key)   licence-filtered search
+       ├─ rankCandidates()            content filter, 30-day no-repeat, date-seeded pick
        ├─ toBackgroundWebp()          sharp → 1080×1920 WebP, q82
        ├─ uploadBackground()          Firebase Storage (public, immutable)
-       └─ upsert daily_backgrounds    Supabase (metadata only)
+       └─ upsert daily_backgrounds    Supabase (metadata + attribution)
 
 Browser
-  getLatestBackground()  →  image_url  →  <canvas>  →  navigator.share()
+  listBackgrounds()  →  image_url  →  <canvas>  →  navigator.share()
 ```
 
 One image per day, shared by every user. The background is chosen by **date**,
 never by the verse — so everyone sharing a verse on 19 September gets the same
-art, and the cost is one image a day regardless of how many people share.
+photo.
 
-**Themes.** Twenty devotional themes (`stillness`, `hope`, `ocean`, `sunrise`…)
-crossed with nine lighting motifs. 20 and 9 are coprime, so the pairing runs
-**180 days** before it repeats. Selection is deterministic: re-running for a
-past date asks for the same picture it asked for the first time.
+**Matching the devotion.** Keywords come from the day's `daily_devotions` row.
+Nature words in the title and key verse are used first ("beside still waters" →
+`lake`, "green pastures" → `meadow`), filled out with a landscape phrase for the
+devotion's theme (`rest` → *quiet forest stream*), because abstract words like
+"grace" return photos of people. If a precise query finds nothing usable the
+script widens to the theme phrase, then to a generic sunrise landscape. With no
+devotion for the date it uses the date's rotating theme. Logic and tests:
+`scripts/selah/stockBackground.js`.
+
+**Licences.** Only photos that may be used commercially without permission or a
+credit on the shared image are accepted: the **Pexels License**, **CC0** and the
+**Public Domain Mark**. CC-BY and other attribution-required licences are
+refused, because the shared card carries no credit. Openverse is queried with
+`license=cc0,pdm`, `category=photograph`, `mature=false`.
+
+**Attribution.** Each row stores `attribution` (provider, source id and page,
+photographer, licence and licence URL, search query, fetch time); the same
+fields are written to the Firebase object's metadata. The verse card shows
+*Photo: &lt;photographer&gt; · &lt;provider&gt;*, linked to the source page,
+under the background picker when a stock photo is selected. A database
+trigger keeps `attribution` only on rows whose `model` starts with `stock:`,
+so replacing a stock day with a generated or uploaded image (`--force` or the
+admin panel) also removes the old credit.
+
+**Choosing among results.** Results are filtered, sorted by source id and
+picked by a date seed, so a rerun for the same date picks the same photo.
+Photos used by any background within 30 days are skipped.
 
 **Storage layout.** `selah/backgrounds/YYYY/MM/DD.webp`, e.g.
 `selah/backgrounds/2026/09/19.webp`.
@@ -308,8 +329,11 @@ the card is always shareable.
 **1. Database**
 
 ```bash
-supabase db push    # applies supabase/migrations/20260919b_daily_backgrounds.sql
+supabase db push    # applies 20260919b_daily_backgrounds.sql and 20261005_daily_background_attribution.sql
 ```
+
+The fetch script stops before downloading anything if the `attribution` column
+is missing.
 
 **2. Firebase Storage**
 
@@ -349,10 +373,11 @@ npm run firebase:check    # prints the bucket's current CORS configuration
 | --- | --- | --- |
 | `FIREBASE_SERVICE_ACCOUNT` | GitHub Actions + `.env.local` | Service account JSON (raw or base64) with **Storage Object Admin**. Firebase console → Project settings → Service accounts → Generate new private key. |
 | `FIREBASE_STORAGE_BUCKET` | GitHub Actions + `.env.local` | e.g. `devotional-app-c2633.firebasestorage.app` |
-| `BACKGROUND_MODEL` | optional | Defaults to `google/gemini-3.1-flash-image` (Nano Banana 2). |
+| `PEXELS_API_KEY` | optional, GitHub Actions + `.env.local` | Free key from pexels.com/api. When set, Pexels is searched first; without it (or if Pexels fails) the script uses Openverse, which needs no key. |
+| `BACKGROUND_MODEL` | optional | Only for `generate-daily-background.js`. Defaults to `google/gemini-3.1-flash-image` (Nano Banana 2). |
 
-`OPENCODE_AUTH_JSON`, `SUPABASE_SERVICE_ROLE_KEY` and `VITE_SUPABASE_URL` are
-already configured for the devotion job and are reused.
+`SUPABASE_SERVICE_ROLE_KEY` and `VITE_SUPABASE_URL` are already configured for
+the devotion job and are reused.
 
 The service account can be supplied three ways, and the right one differs by
 environment:
@@ -377,31 +402,32 @@ the Action and on developer machines only; it must never reach the browser.
 ### Running it
 
 ```bash
-npm run background:dry-run                                    # generate + process, upload nothing
-node scripts/generate-daily-background.js --out /tmp/bg.webp  # dry-run and save the image to look at
-npm run background:generate                                   # the real thing
-node scripts/generate-daily-background.js --date 2026-09-19 --force   # regenerate one day
+npm run background:fetch:dry-run                              # search + download + process, upload nothing
+node scripts/fetch-daily-background.js --dry-run --theme stillness --out /tmp/bg.webp   # save it to look at
+npm run background:fetch                                      # the real thing
+node scripts/fetch-daily-background.js --date 2026-09-19 --force   # replace one day
 ```
 
-The local path needs the same agent stack as the devotion generator:
+A dry run reads the devotion when Supabase credentials are present and works
+without any credentials at all (searching by `--theme` or the date's theme).
 
-```bash
-opencode serve --port 4097
-cd backend/bridge/opencode-bridge && npm start    # bridge on 4098
-```
+**Manual trigger in CI.** Actions → *Daily devotion* → Run workflow. Inputs:
+`date`, `model` (devotion only) and `force`, which replaces an existing
+devotion **and** background.
 
-**Manual trigger in CI.** Actions → *Daily devotion and background* → Run
-workflow. Inputs: `date`, `force` (replaces an existing devotion **and**
-background), `background_model`, `skip_background`.
+**Failures never fail the job.** No usable photo, a provider outage, a missing
+secret or a Firebase error prints a `::warning::` annotation and exits 0; the
+step is also `continue-on-error`. Only a bad argument (e.g. an invalid
+`--date`) exits 1. The app keeps showing the previous background.
 
-### Uploading backgrounds by hand
+### Other ways to supply a background
 
-The AI generator is the normal path, but it needs a billing-enabled Gemini key.
-`scripts/upload-background.js` does the identical second half — resize to
-1080×1920 WebP, upload to Firebase, write the metadata row — from images you
-already have. **The app cannot tell the difference**: it reads the
-`daily_backgrounds` row either way, so the whole feature works with no model
-spend at all.
+`scripts/upload-background.js` uploads images you already have, and
+`scripts/generate-daily-background.js` generates one with an image model
+(Nano Banana 2 through the OpenCode bridge; needs a billing-enabled Gemini key,
+since Gemini image generation has no free tier). Both do the same resize,
+upload and row write as the fetch script, without attribution. **The app cannot
+tell the difference**: it reads the `daily_backgrounds` row either way.
 
 ```bash
 npm run background:upload -- --file sunrise.jpg                    # today
@@ -419,36 +445,32 @@ Pick calm images with uncluttered middles — the verse is set over that area.
 Rows are recorded with `model: 'manual-upload'` so hand-picked and generated
 backgrounds stay distinguishable later.
 
-### Reruns are free
+### Reruns
 
-The generator checks for an existing background **before** generating, because
-an image costs money and a rerun must not:
-
-1. A `daily_backgrounds` row exists → stop, unless `--force`.
-2. No row, but the image is already in Firebase (a previous run died between
-   the upload and the insert) → reuse the image, just write the row.
-3. Neither → generate.
+The fetch script is idempotent by date: if a `daily_backgrounds` row exists it
+stops before contacting any provider, unless `--force`. A rerun with `--force`
+picks a different photo, since the replaced one now counts as recently used.
 
 Firebase is written before Supabase, deliberately. The row is the app's source
-of truth, so it must never point at an image that is not there. The worst case
-is an orphaned image, which step 2 turns into a free repair on the next run.
+of truth, so it must never point at an image that is not there. If a run dies
+between the two, the next run finds no row and fetches again, overwriting the
+orphaned object.
 
 ### Troubleshooting
 
-**"The agent returned no image. Is … an image model?"** — the bridge completed
-but no image part came back. The error quotes whatever the model *did* say. The
-usual cause is `BACKGROUND_MODEL` pointing at a text model.
+**"No freely-licensed photo matched any query."** — every query returned
+nothing that passed the licence and content filters. Rerun with `--theme` to
+try a different phrase, or upload one by hand.
 
-**HTTP 429, `limit: 0`, free tier** — Gemini image generation has **no free
-tier**. The Google Cloud project behind the key needs billing enabled. A valid
-key that works fine for text will still return `limit: 0` for every image
-model; this is a billing setting, not a code problem.
+**"pexels returned HTTP 401/403 — skipping pexels"** — `PEXELS_API_KEY` is wrong
+or revoked. The run continues with Openverse.
 
-**"The returned bytes are not a PNG, JPEG, WebP or GIF image."** — something
-non-image came back. The raw bytes are saved to
-`.selah-debug/<date>-background-rejected.bin` and uploaded as a CI artifact.
-Formats are checked by magic bytes, not by a claimed MIME type, so prose that
-base64-decodes cleanly is still rejected.
+**"Could not read recent backgrounds … attribution"** — the attribution
+migration has not been pushed. See step 1.
+
+**"The returned bytes are not a PNG, JPEG, WebP or GIF image."** — the download
+was not an image. Formats are checked by magic bytes, not by a claimed MIME
+type; the script tries the next of the top three results.
 
 **"Firebase upload failed"** — check the service account has *Storage Object
 Admin* and that `FIREBASE_STORAGE_BUCKET` is the bucket **host**
@@ -462,21 +484,6 @@ rule is missing. See step 2 above.
 **Nothing at all happens on the card** — open the console. `getLatestBackground`
 warns rather than throws; a missing table (migration not pushed) or an RLS
 denial both surface there.
-
-### Re-enabling automatic generation
-
-1. Enable billing on the Google Cloud project that owns `GEMINI_API_KEY` —
-   check which project that is at aistudio.google.com/apikey, as AI Studio keys
-   often live in an auto-created project rather than your Firebase one.
-2. Confirm it worked before touching the workflow:
-   ```bash
-   npm run background:dry-run    # needs opencode serve + the bridge running
-   ```
-3. Add a step back to `.github/workflows/daily-devotion.yml`, after the devotion
-   step, running `node scripts/generate-daily-background.js` with
-   `FIREBASE_SERVICE_ACCOUNT` and `FIREBASE_STORAGE_BUCKET` in its `env`.
-
-Roughly $0.03-0.04 per image, one a day, shared by every user — about $1/month.
 
 ### Future: the background gallery
 
