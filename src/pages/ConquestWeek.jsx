@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactDOM from 'react-dom'
 import { useAuth } from '../context/AuthContext'
 import { useRewards } from '../context/RewardsContext'
@@ -21,6 +21,7 @@ import {
 } from '../lib/gamification'
 import { ChevronLeftIcon, ChevronRightIcon, CheckIcon, TrashIcon, PlusIcon, XIcon, ACHIEVEMENT_ICONS } from '../icons'
 import { usePending } from '../lib/usePending'
+import { missingRecurringItems } from '../lib/conquestRecurring'
 
 async function getRecurringItems(userId) {
   const { data, error } = await supabase.from('conquest_recurring').select('id, title, category, days').eq('user_id', userId).order('created_at')
@@ -44,31 +45,17 @@ async function removeRecurringItem(id) {
   if (error) throw error
 }
 
-async function applyRecurringItems(userId, weekStart, days, existingItems, recurringItems) {
-  if (recurringItems.length === 0) return false
-  const newItems = [],
-    titlesByDate = new Map()
-  for (const item of existingItems) titlesByDate.has(item.date) || titlesByDate.set(item.date, new Set()), titlesByDate.get(item.date).add(item.title)
-  for (let dayIndex = 0; dayIndex < days.length; dayIndex++) {
-    const date = days[dayIndex],
-      titlesForDate = titlesByDate.get(date) ?? new Set()
-    for (const recurringItem of recurringItems) recurringItem.days.length > 0 && !recurringItem.days.includes(dayIndex) || titlesForDate.has(recurringItem.title) || newItems.push({
-      id: crypto.randomUUID(),
-      date,
-      title: recurringItem.title,
-      done: false,
-      category: recurringItem.category,
-    })
-  }
-  if (newItems.length === 0) return false
-  const combinedItems = [...existingItems, ...newItems],
-    { error } = await supabase.from('conquest_weeks').upsert({
-      user_id: userId,
-      week_start: weekStart,
-      items: combinedItems,
-    })
+// Appends the week's missing recurring instances in one locked server call, so
+// reloads, StrictMode double effects and other tabs cannot duplicate them or
+// overwrite each other. Creates the week row if it does not exist yet.
+async function applyRecurringItems(weekStart, items, recurringIds) {
+  const { data, error } = await supabase.rpc('apply_conquest_recurring', {
+    p_week_start: weekStart,
+    p_items: items,
+    p_recurring_ids: recurringIds,
+  })
   if (error) throw error
-  return true
+  return data ? mapConquestWeek(data) : null
 }
 
 function mapConquestWeek(row) {
@@ -76,7 +63,8 @@ function mapConquestWeek(row) {
     id: `${row.user_id}_${row.week_start}`,
     uid: row.user_id,
     weekStart: row.week_start,
-    items: row.items,
+    items: row.items ?? [],
+    recurringApplied: row.recurring_applied ?? [],
     createdAt: new Date(row.created_at).getTime(),
     updatedAt: new Date(row.updated_at).getTime(),
   }
@@ -177,8 +165,8 @@ const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 export default function ConquestWeek() {
   const { user } = useAuth(),
     { showReward } = useRewards(),
-    today = todayISO(),
-    [weekStart, setWeekStart] = useState(startOfWeekMonday(today)),
+    [today, setToday] = useState(todayISO),
+    [weekStart, setWeekStart] = useState(() => startOfWeekMonday(today)),
     [week, setWeek] = useState(void 0),
     pendingToggles = usePending(),
     days = useMemo(() => weekDays(weekStart), [weekStart]),
@@ -186,30 +174,80 @@ export default function ConquestWeek() {
     [showAddSheet, setShowAddSheet] = useState(false),
     [draft, setDraft] = useState(''),
     [error, setError] = useState(null)
+  // "Today" is the device's local day — recompute on visibility/focus and every
+  // minute so a tab left open across midnight (and across Monday) rolls over
+  // without a refresh.
   useEffect(() => {
-    if (user) return setWeek(void 0), subscribeToConquestWeek(user.id, weekStart, setWeek)
+    const update = () => setToday(todayISO())
+    const onVisible = () => {
+      if (!document.hidden) update()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+    const id = setInterval(update, 60_000)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
+      clearInterval(id)
+    }
+  }, [])
+  // When the current week rolls over, follow it if the user was on the old
+  // current week; leave them alone if they were browsing another week.
+  const prevTodayRef = useRef(today)
+  useEffect(() => {
+    const previousWeek = startOfWeekMonday(prevTodayRef.current),
+      nextWeek = startOfWeekMonday(today)
+    prevTodayRef.current = today
+    previousWeek !== nextWeek && setWeekStart(current => current === previousWeek ? nextWeek : current)
+  }, [today])
+  // `loadedWeekStart` says which week `week` belongs to, so the recurring apply
+  // below never reads the previous week's state in the render after navigation.
+  const [loadedWeekStart, setLoadedWeekStart] = useState(null)
+  useEffect(() => {
+    if (user) return setWeek(void 0), setLoadedWeekStart(null), subscribeToConquestWeek(user.id, weekStart, loaded => {
+      setWeek(loaded), setLoadedWeekStart(weekStart)
+    })
   }, [user, weekStart])
   const [recurringItems, setRecurringItems] = useState([]),
+    [recurringLoaded, setRecurringLoaded] = useState(false),
     [showManageRecurring, setShowManageRecurring] = useState(false),
-    appliedKeyRef = useRef('')
+    applyingKeyRef = useRef(''),
+    weekStartRef = useRef(weekStart)
+  weekStartRef.current = weekStart
   useEffect(() => {
-    user && getRecurringItems(user.id).then(setRecurringItems).catch(console.error)
+    user && getRecurringItems(user.id).then(items => {
+      setRecurringItems(items), setRecurringLoaded(true)
+    }).catch(console.error)
   }, [user])
-  const applyRecurring = useCallback(async () => {
-    if (!user || !week || recurringItems.length === 0) return
-    const key = `${weekStart}:${recurringItems.map(item => item.id).join(',')}`
-    if (appliedKeyRef.current !== key) {
-      appliedKeyRef.current = key
-      try {
-        await applyRecurringItems(user.id, weekStart, days, week.items, recurringItems)
-      } catch (err) {
-        console.error('applyRecurring failed', err)
-      }
-    }
-  }, [user, week, weekStart, days, recurringItems])
+  // Once both the week (row or null) and the recurring list have loaded,
+  // materialise any recurring items this week is still missing. This runs on
+  // first load of every week, including a brand-new week with no row yet.
   useEffect(() => {
-    applyRecurring()
-  }, [applyRecurring]), useEffect(() => {
+    if (!user || week === void 0 || loadedWeekStart !== weekStart || !recurringLoaded) return
+    const { items: newItems, appliedIds } = missingRecurringItems({
+      weekStart,
+      existingItems: week?.items ?? [],
+      recurringItems,
+      appliedIds: week?.recurringApplied ?? [],
+    })
+    if (appliedIds.length === 0) return
+    // Guards against firing the same apply twice while one is in flight
+    // (StrictMode, realtime refetches); the server call is idempotent anyway.
+    const key = `${user.id}:${weekStart}:${appliedIds.join(',')}`
+    if (applyingKeyRef.current === key) return
+    applyingKeyRef.current = key
+    applyRecurringItems(weekStart, newItems, appliedIds)
+      .then(updated => {
+        // Realtime also refetches the row; this just avoids waiting for it.
+        updated && updated.weekStart === weekStartRef.current && setWeek(updated)
+      })
+      .catch(err => {
+        console.error('applyRecurring failed', err)
+        // Allow a retry on the next week refresh.
+        applyingKeyRef.current === key && (applyingKeyRef.current = '')
+      })
+  }, [user, week, loadedWeekStart, weekStart, recurringItems, recurringLoaded])
+  useEffect(() => {
     setSelectedDayIndex(Math.max(0, weekDays(weekStart).indexOf(today)))
   }, [weekStart])
   const items = (week == null ? void 0 : week.items) ?? [],
@@ -220,10 +258,22 @@ export default function ConquestWeek() {
     totalCount = weekItems.length,
     isCurrentWeek = weekStart === startOfWeekMonday(today),
     isToday = selectedDate === today,
+    // Resolves true once the item is saved, false if it failed or was skipped.
     handleAddItem = (title, category) => {
-      !user || !title.trim() || (setError(null), addConquestItem(user.id, weekStart, selectedDate, title.trim(), category).catch(err => {
+      if (!user || !title.trim()) return Promise.resolve(false)
+      setError(null)
+      return addConquestItem(user.id, weekStart, selectedDate, title.trim(), category).then(() => true, err => {
         console.error('addConquestItem failed', err), setError('Could not add that — check your connection and try again.')
-      }))
+        return false
+      })
+    },
+    // The recurring rule is saved only after the day's item has been written:
+    // adding it to `recurringItems` triggers the recurring apply, and running
+    // that alongside addConquestItem's read-modify-write upsert could drop the
+    // freshly applied instances.
+    handleAddRecurring = (title, category, recurDays) => {
+      if (!user) return
+      addRecurringItem(user.id, title, category, recurDays).then(newItem => setRecurringItems(prev => [...prev, newItem])).catch(console.error)
     },
     // Deliberately NOT optimistic. `week` is fed by a realtime subscription
     // whose handler refetches the row, and a fetch that began before the write
@@ -262,8 +312,13 @@ export default function ConquestWeek() {
     closeAddSheet = () => {
       setShowAddSheet(false), setDraft('')
     },
-    submitDraft = category => {
-      draft.trim() && (handleAddItem(draft, category), setDraft(''))
+    submitDraft = (category, recurDays) => {
+      const title = draft.trim()
+      if (!title) return
+      setDraft('')
+      handleAddItem(title, category).then(saved => {
+        saved && recurDays && handleAddRecurring(title, category, recurDays)
+      })
     },
     touchStartXRef = useRef(null),
     handleTouchStart = e => {
@@ -284,9 +339,7 @@ export default function ConquestWeek() {
         return <button onClick={() => setSelectedDayIndex(index)} className={`relative flex flex-1 flex-col items-center gap-0.5 rounded-xl py-2 transition-colors duration-200 ${isSelected ? "bg-accent text-accent-on" : "bg-raised text-muted hover:text-ink"}`} key={date}>{isTodayTab && !isSelected && <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-accent" />}<span className="font-sans text-[0.7rem] font-semibold tracking-wide">{DAY_LABELS[index]}</span>{totalForDay > 0 && <span className={`text-[0.6rem] ${isSelected ? "text-accent-on/70" : "text-muted"}`}>{doneForDay}/{totalForDay}</span>}</button>;
       })}</div><div className="flex items-center justify-between gap-2"><div><p className="eyebrow">{isToday ? "Today · " : ""}{formatWeekday(selectedDate)}</p><h2 className="font-sans text-lg font-semibold tracking-tight">{isToday ? "Today's Conquest" : `${formatWeekday(selectedDate)}'s Plan`}</h2></div><div className="flex items-center gap-2"><button onClick={() => setSelectedDayIndex(idx => Math.max(0, idx - 1))} disabled={selectedDayIndex === 0} aria-label="Previous day" className="flex h-8 w-8 items-center justify-center rounded-full border border-line text-muted transition-colors hover:bg-raised disabled:opacity-30"><ChevronLeftIcon width={15} height={15} /></button><button onClick={() => setSelectedDayIndex(idx => Math.min(6, idx + 1))} disabled={selectedDayIndex === 6} aria-label="Next day" className="flex h-8 w-8 items-center justify-center rounded-full border border-line text-muted transition-colors hover:bg-raised disabled:opacity-30"><ChevronRightIcon width={15} height={15} /></button></div></div><div onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} className="min-h-[8rem] space-y-2">{week === void 0 ? <LoadingSkeleton /> : dayItems.length === 0 ? <div className="flex flex-col items-center gap-2 py-10 text-center"><span className="text-3xl opacity-40" aria-hidden={!0}>⚔️</span><p className="text-sm text-pretty text-muted">No battles planned yet.<br />Add your first task below.</p></div> : dayItems.map(item => <div className={`flex items-center gap-3 rounded-2xl px-4 py-3.5 transition-colors ${item.done ? "bg-raised/60" : "card"}`} key={item.id}><button onClick={() => handleToggleItem(item.id, !item.done)} disabled={pendingToggles.has(item.id)} aria-pressed={item.done} aria-busy={pendingToggles.has(item.id)} aria-label={item.done ? `Mark "${item.title}" not done` : `Mark "${item.title}" done`} className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${item.done ? "border-accent bg-accent text-accent-on" : "border-accent/40 text-transparent hover:border-accent"}`}>{pendingToggles.has(item.id) ? <span className="h-3 w-3 animate-spin rounded-full border-2 border-current/30 border-t-accent" /> : <CheckIcon width={13} height={13} strokeWidth={3} />}</button>{item.category && <span aria-hidden={!0} className="h-2 w-2 shrink-0 rounded-full" style={{
           backgroundColor: ACHIEVEMENT_CATEGORIES_BY_ID[item.category].color
-        }} />}<span className={`flex-1 text-sm ${item.done ? "text-muted line-through" : "text-ink"}`}>{item.title}</span><button onClick={() => handleRemoveItem(item.id)} disabled={pendingToggles.has(item.id)} aria-busy={pendingToggles.has(item.id)} aria-label={`Remove ${item.title}`} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted/60 transition-colors hover:bg-red-500/10 hover:text-red-500 disabled:opacity-40">{pendingToggles.has(item.id) ? <span className="h-3 w-3 animate-spin rounded-full border-2 border-line border-t-muted" /> : <TrashIcon width={14} height={14} />}</button></div>)}</div><button onClick={openAddSheet} className="btn-accent w-full py-3.5 text-sm"><PlusIcon width={17} height={17} /> Add to {DAY_LABELS[selectedDayIndex]}</button><button onClick={() => setShowManageRecurring(!0)} className="w-full rounded-2xl border border-line bg-raised px-4 py-3 text-sm font-semibold text-ink transition-colors hover:border-accent/40">🔁 Manage Recurring Items{recurringItems.length > 0 && ` (${recurringItems.length})`}</button>{showAddSheet && <AddItemSheet dayLabel={formatWeekday(selectedDate)} draft={draft} setDraft={setDraft} onSubmit={submitDraft} onClose={closeAddSheet} onQuickAdd={handleAddItem} existingTitles={dayItems.map(item => item.title)} onAddRecurring={(title, category, recurDays) => {
-      user && addRecurringItem(user.id, title, category, recurDays).then(newItem => setRecurringItems(prev => [...prev, newItem])).catch(console.error);
-    }} />}{showManageRecurring && <ManageRecurringSheet items={recurringItems} onRemove={id => {
+        }} />}<span className={`flex-1 text-sm ${item.done ? "text-muted line-through" : "text-ink"}`}>{item.title}</span><button onClick={() => handleRemoveItem(item.id)} disabled={pendingToggles.has(item.id)} aria-busy={pendingToggles.has(item.id)} aria-label={`Remove ${item.title}`} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted/60 transition-colors hover:bg-red-500/10 hover:text-red-500 disabled:opacity-40">{pendingToggles.has(item.id) ? <span className="h-3 w-3 animate-spin rounded-full border-2 border-line border-t-muted" /> : <TrashIcon width={14} height={14} />}</button></div>)}</div><button onClick={openAddSheet} className="btn-accent w-full py-3.5 text-sm"><PlusIcon width={17} height={17} /> Add to {DAY_LABELS[selectedDayIndex]}</button><button onClick={() => setShowManageRecurring(!0)} className="w-full rounded-2xl border border-line bg-raised px-4 py-3 text-sm font-semibold text-ink transition-colors hover:border-accent/40">🔁 Manage Recurring Items{recurringItems.length > 0 && ` (${recurringItems.length})`}</button>{showAddSheet && <AddItemSheet dayLabel={formatWeekday(selectedDate)} draft={draft} setDraft={setDraft} onSubmit={submitDraft} onClose={closeAddSheet} onQuickAdd={handleAddItem} existingTitles={dayItems.map(item => item.title)} />}{showManageRecurring && <ManageRecurringSheet items={recurringItems} onRemove={id => {
       removeRecurringItem(id).then(() => setRecurringItems(prev => prev.filter(item => item.id !== id))).catch(console.error);
     }} onClose={() => setShowManageRecurring(!1)} />}</div>;
 }
@@ -309,8 +362,7 @@ function AddItemSheet({
   onSubmit,
   onClose,
   onQuickAdd,
-  existingTitles,
-  onAddRecurring
+  existingTitles
 }) {
   const [category, setCategory] = useState("spiritual"),
     [recurring, setRecurring] = useState(!1),
@@ -331,9 +383,9 @@ function AddItemSheet({
           } : void 0} key={categoryOption.id}><span aria-hidden={!0} className="h-1.5 w-1.5 rounded-full" style={{
               backgroundColor: category === categoryOption.id ? "#1c1c1c" : categoryOption.color
             }} />{categoryOption.label}</button>)}</div><div className="mt-4 flex gap-2"><input value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => {
-            event.key === "Enter" && (recurring && draft.trim() && onAddRecurring(draft.trim(), category, recurringDays), onSubmit(category));
+            event.key === "Enter" && onSubmit(category, recurring ? recurringDays : null);
           }} placeholder="Type a task…" className="input" /><button onClick={() => {
-            recurring && draft.trim() && onAddRecurring(draft.trim(), category, recurringDays), onSubmit(category);
+            onSubmit(category, recurring ? recurringDays : null);
           }} aria-label="Add task" className="btn-accent shrink-0 px-3.5"><PlusIcon width={17} height={17} /></button></div><div className="mt-4 space-y-2"><label className="flex cursor-pointer items-center gap-2.5 text-sm"><input type="checkbox" checked={recurring} onChange={event => setRecurring(event.target.checked)} className="h-4 w-4 rounded border-line accent-accent" /><span className="font-medium text-ink">Make recurring</span><span className="text-xs text-muted">(auto-adds each week)</span></label>{recurring && <div className="flex gap-1.5 pl-6">{DAY_LABELS.map((label, dayIndex) => <button type="button" onClick={() => toggleRecurringDay(dayIndex)} className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold transition-colors ${recurringDays.includes(dayIndex) ? "bg-accent text-accent-on" : "border border-line text-muted hover:text-ink"}`} key={label}>{label[0]}</button>)}<span className="ml-1.5 self-center text-[0.65rem] text-muted">{recurringDays.length === 0 ? "Every day" : ""}</span></div>}</div>{(() => {
           const quickAddTasks = CONQUEST_TASKS.filter(task => task.category === category);
           return quickAddTasks.length === 0 ? null : <><p className="eyebrow mb-2 mt-4">Quick add</p><div className="flex flex-wrap gap-2">{quickAddTasks.map(task => {
@@ -360,7 +412,7 @@ function ManageRecurringSheet({
     return document.addEventListener("keydown", handleKeyDown), () => document.removeEventListener("keydown", handleKeyDown);
   }, [onClose]), ReactDOM.createPortal(<><div className="animate-fade-in fixed inset-0 z-modal-backdrop bg-black/50 backdrop-blur-sm" style={{
       animationDuration: "200ms"
-    }} onClick={onClose} /><div className="animate-sheet-up fixed inset-x-0 bottom-0 z-modal mx-auto max-h-[85dvh] max-w-xl overflow-y-auto rounded-t-3xl border-t border-line bg-surface shadow-lift"><div className="flex justify-center pt-3"><div className="h-1 w-10 rounded-full bg-line" /></div><div className="px-5 pb-[calc(1.5rem+env(safe-area-inset-bottom))] pt-3"><div className="flex items-center justify-between"><h3 className="font-sans text-base font-semibold tracking-tight">Recurring Items</h3><button onClick={onClose} aria-label="Close" className="flex h-7 w-7 items-center justify-center rounded-full bg-raised text-muted"><XIcon width={13} height={13} /></button></div><p className="mt-1 text-xs text-muted">These items are automatically added to your week when you navigate to a new week.</p>{items.length === 0 ? <div className="flex flex-col items-center gap-2 py-8 text-center"><span className="text-2xl opacity-40" aria-hidden={!0}>🔁</span><p className="text-sm text-muted">No recurring items yet.<br />Mark a task as recurring when adding it.</p></div> : <div className="mt-4 space-y-2">{items.map(item => <div className="flex items-center gap-3 rounded-2xl bg-raised px-4 py-3" key={item.id}>{item.category && <span aria-hidden={!0} className="h-2 w-2 shrink-0 rounded-full" style={{
+    }} onClick={onClose} /><div className="animate-sheet-up fixed inset-x-0 bottom-0 z-modal mx-auto max-h-[85dvh] max-w-xl overflow-y-auto rounded-t-3xl border-t border-line bg-surface shadow-lift"><div className="flex justify-center pt-3"><div className="h-1 w-10 rounded-full bg-line" /></div><div className="px-5 pb-[calc(1.5rem+env(safe-area-inset-bottom))] pt-3"><div className="flex items-center justify-between"><h3 className="font-sans text-base font-semibold tracking-tight">Recurring Items</h3><button onClick={onClose} aria-label="Close" className="flex h-7 w-7 items-center justify-center rounded-full bg-raised text-muted"><XIcon width={13} height={13} /></button></div><p className="mt-1 text-xs text-muted">These items are automatically added to each week.</p>{items.length === 0 ? <div className="flex flex-col items-center gap-2 py-8 text-center"><span className="text-2xl opacity-40" aria-hidden={!0}>🔁</span><p className="text-sm text-muted">No recurring items yet.<br />Mark a task as recurring when adding it.</p></div> : <div className="mt-4 space-y-2">{items.map(item => <div className="flex items-center gap-3 rounded-2xl bg-raised px-4 py-3" key={item.id}>{item.category && <span aria-hidden={!0} className="h-2 w-2 shrink-0 rounded-full" style={{
               backgroundColor: ACHIEVEMENT_CATEGORIES_BY_ID[item.category].color
             }} />}<div className="flex-1"><span className="text-sm font-medium text-ink">{item.title}</span><span className="ml-2 text-[0.65rem] text-muted">{item.days.length === 0 ? "Every day" : item.days.map(dayIdx => DAY_LABELS[dayIdx]).join(", ")}</span></div><button onClick={() => onRemove(item.id)} aria-label={`Remove recurring "${item.title}"`} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted/60 transition-colors hover:bg-red-500/10 hover:text-red-500"><TrashIcon width={14} height={14} /></button></div>)}</div>}</div></div></>, document.body);
 }

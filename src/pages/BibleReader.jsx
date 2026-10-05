@@ -17,7 +17,7 @@ import { getBookmark, saveBookmark, clearBookmark } from '../data/bookmark'
 import { getStoredHighlights, saveStoredHighlights, fetchHighlights, saveHighlights } from '../data/highlights'
 import { isHighlightColor, applyColor, removeColors, hydrateHighlights } from '../lib/highlights'
 import { savedVerses } from '../lib/savedVerses'
-import { sanitizeBookmark, toggleBookmark, isBookmarked, bookmarkLabel, resolveBookmarkTranslation, readBookmark, writeBookmark } from '../lib/bookmark'
+import { toggleBookmark, isBookmarked, bookmarkLabel, resolveBookmarkTranslation, readBookmarkState, writeBookmarkState, stampBookmark, serverBookmarkState, mergeBookmark, shouldRefresh } from '../lib/bookmark'
 import { tapVerse, joinSelectedText } from '../lib/selection'
 import { swipeDirection } from '../lib/swipe'
 import { useOfflineBibles } from '../lib/useOfflineBibles'
@@ -60,6 +60,8 @@ function bookmarkStorage() {
 }
 const isTranslation = (id) => ALL_BIBLES.some((b) => b.id === id)
 const BOOKMARK_OPTIONS = { getBook, isTranslation }
+// Minimum gap between bookmark refreshes triggered by focus/visibility.
+const BOOKMARK_REFRESH_MS = 15_000
 function savedPosition() {
   const saved = readStored('bible:position', {})
   const book = getBook(saved.book) ?? getBook('John')
@@ -130,14 +132,16 @@ export default function BibleReader() {
   const initialPositionRef = useRef(position)
   const latestPositionRef = useRef(position)
   // Chapter bookmark (src/lib/bookmark.js): a ribbon the reader sets by hand,
-  // independent of the automatic position above. bookmarkHydratedRef gates
-  // server writes until the account row has been read; bookmarkDirtyRef marks
-  // a set/remove made while that read was in flight, so it wins over the
-  // server copy instead of being reverted by it.
-  const [bookmark, setBookmark] = useState(() => readBookmark(bookmarkStorage(), BOOKMARK_OPTIONS))
-  const bookmarkRef = useRef(bookmark)
+  // independent of the automatic position above. bookmarkStateRef holds the
+  // timestamped { bookmark, updatedAt, syncedAt } this device knows.
+  // bookmarkHydratedRef gates server writes until the account row has been
+  // read; bookmarkEditRef counts local edits so a set/remove made while a
+  // read was in flight wins over that read instead of being reverted by it.
+  const bookmarkStateRef = useRef(null)
+  if (bookmarkStateRef.current === null) bookmarkStateRef.current = readBookmarkState(bookmarkStorage(), BOOKMARK_OPTIONS)
+  const [bookmark, setBookmark] = useState(() => bookmarkStateRef.current.bookmark)
   const bookmarkHydratedRef = useRef(false)
-  const bookmarkDirtyRef = useRef(false)
+  const bookmarkEditRef = useRef(0)
   const marked = isBookmarked(bookmark, position)
   const requestKey = `${book}:${chapter}:${translation}`
   const current = chapterData?.requestKey === requestKey ? chapterData : null
@@ -220,36 +224,46 @@ export default function BibleReader() {
       .catch(() => { hydratedRef.current = true })
     return () => { cancelled = true }
   }, [user])
-  // Restore the account bookmark once per sign-in. The server copy wins over
-  // localStorage; with no server row, a local bookmark is uploaded. A set or
-  // remove made while the read was in flight is pushed instead. A failed read
+  // Sync the account bookmark when the reader opens and again whenever the
+  // app becomes visible or focused (throttled), so a change made on another
+  // device shows without a reload. mergeBookmark decides: the newer of the
+  // local copy and the row wins, a removal included. A set or remove made
+  // while the read was in flight is pushed instead. A failed first read
   // leaves the gate closed so nothing overwrites the account row.
   useEffect(() => {
-    let cancelled = false
     bookmarkHydratedRef.current = false
-    bookmarkDirtyRef.current = false
     if (!user) return
-    getBookmark(user.id)
-      .then((saved) => {
+    let cancelled = false
+    let inFlight = false
+    let lastFetch = 0
+    const sync = async () => {
+      if (inFlight || !shouldRefresh(lastFetch, Date.now(), BOOKMARK_REFRESH_MS)) return
+      inFlight = true
+      lastFetch = Date.now()
+      const edits = bookmarkEditRef.current
+      try {
+        const row = await getBookmark(user.id)
         if (cancelled) return
         bookmarkHydratedRef.current = true
-        const local = bookmarkRef.current
-        if (bookmarkDirtyRef.current || !saved) {
-          bookmarkDirtyRef.current = false
-          // A retired translation (null) uploads as the one being read; the
-          // column is not null and the jump would fall back to it anyway.
-          if (local) saveBookmark(user.id, { ...local, translation: local.translation ?? latestPositionRef.current.translation }).catch(() => {})
-          else if (saved) clearBookmark(user.id).catch(() => {})
-          return
-        }
-        const next = sanitizeBookmark(saved, BOOKMARK_OPTIONS)
-        if (!next) return
-        bookmarkRef.current = next
-        setBookmark(next)
-        writeBookmark(bookmarkStorage(), next)
-      })
-      .catch(() => { /* best-effort sync; the local bookmark still works. */ })
-    return () => { cancelled = true }
+        const local = bookmarkStateRef.current
+        const { next, action } = bookmarkEditRef.current !== edits
+          ? { next: local, action: 'push' }
+          : mergeBookmark(local, serverBookmarkState(row, BOOKMARK_OPTIONS))
+        if (action === 'adopt') commitBookmarkState(next)
+        else if (action === 'push') await pushBookmarkState(user.id, next)
+      } catch { /* best-effort sync; the local bookmark still works. */ } finally {
+        inFlight = false
+      }
+    }
+    const onVisible = () => { if (!document.hidden) sync() }
+    sync()
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+    return () => {
+      cancelled = true
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
+    }
   }, [user])
   useEffect(() => { saveStored('bible:fontSize', fontSize) }, [fontSize])
   useEffect(() => { saveStored('bible:font', font) }, [font])
@@ -368,13 +382,28 @@ export default function BibleReader() {
       window.scrollTo({ top: 0 })
     }
   }
+  function commitBookmarkState(state) {
+    bookmarkStateRef.current = state
+    setBookmark(state.bookmark)
+    return writeBookmarkState(bookmarkStorage(), state)
+  }
+  // Uploads a state (a removal as a cleared row), then records the server time
+  // as both clocks — unless the reader edited again while it was in flight.
+  async function pushBookmarkState(uid, state) {
+    const local = state.bookmark
+    // A retired translation (null) uploads as the one being read; the jump
+    // would fall back to it anyway.
+    const serverTime = local
+      ? await saveBookmark(uid, { ...local, translation: local.translation ?? latestPositionRef.current.translation })
+      : await clearBookmark(uid)
+    if (serverTime && bookmarkStateRef.current === state) commitBookmarkState({ ...state, updatedAt: serverTime, syncedAt: serverTime })
+  }
   function toggleBookmarkHere() {
     const next = toggleBookmark(bookmark, position)
-    bookmarkRef.current = next
-    setBookmark(next)
-    const stored = writeBookmark(bookmarkStorage(), next)
-    if (user && bookmarkHydratedRef.current) (next ? saveBookmark(user.id, next) : clearBookmark(user.id)).catch(() => {})
-    else if (user) bookmarkDirtyRef.current = true
+    const state = stampBookmark(bookmarkStateRef.current, next, Date.now())
+    bookmarkEditRef.current += 1
+    const stored = commitBookmarkState(state)
+    if (user && bookmarkHydratedRef.current) pushBookmarkState(user.id, state).catch(() => {})
     if (!stored) toast.error(next ? 'Could not save — your browser blocked storage.' : 'Could not remove — your browser blocked storage.')
     else toast.success(next ? `Bookmarked ${bookmarkLabel(next)}` : 'Bookmark removed')
   }

@@ -48,16 +48,118 @@ export function resolveBookmarkTranslation(bookmark, currentTranslation, isTrans
   return bookmark?.translation && isTranslation(bookmark.translation) ? bookmark.translation : currentTranslation
 }
 
-export function readBookmark(storage, options) {
+// Sync state. The stored value carries two clocks next to the bookmark:
+//   updatedAt — ms of the last set/remove on this device (or the server time
+//               it was synced at), so newest-wins can compare it with the row;
+//   syncedAt  — server updated_at (ms) this copy last matched, null if never.
+// A removal is stored as { cleared: true, updatedAt, syncedAt } rather than
+// deleting the key, so a stale copy can tell "removed later elsewhere" from
+// "never synced". A legacy bare { book, chapter, translation } reads as
+// updatedAt 0: it loses to any server state.
+//
+// Clocks: updatedAt from a local edit is the client clock, the row's is the
+// database clock. After every sync both become the server time, and a local
+// edit always stamps past the last synced time, so skew only matters when two
+// devices edit within the skew window of each other.
+
+const EMPTY_STATE = Object.freeze({ bookmark: null, updatedAt: 0, syncedAt: null })
+
+function toTime(value) {
+  const n = Number(value)
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+
+/** Postgres timestamptz (ISO, often with microseconds) to ms; 0 if unreadable.
+ *  Fractional seconds are cut to ms first because some engines (older Safari)
+ *  reject more than three digits. */
+export function parseServerTime(value) {
+  if (typeof value !== 'string') return 0
+  const ms = Date.parse(value.replace(/(\.\d{3})\d+/, '$1'))
+  return Number.isFinite(ms) ? ms : 0
+}
+
+/** Reads { bookmark, updatedAt, syncedAt }; corrupt or missing values read as
+ *  the empty, never-synced state. */
+export function readBookmarkState(storage, options) {
   try {
     const raw = storage?.getItem(BOOKMARK_KEY)
-    return raw ? sanitizeBookmark(JSON.parse(raw), options) : null
+    if (!raw) return EMPTY_STATE
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return EMPTY_STATE
+    const updatedAt = toTime(parsed.updatedAt)
+    const syncedAt = toTime(parsed.syncedAt) || null
+    if (parsed.cleared === true) return { bookmark: null, updatedAt, syncedAt }
+    const bookmark = sanitizeBookmark(parsed, options)
+    return bookmark ? { bookmark, updatedAt, syncedAt } : EMPTY_STATE
   } catch {
-    return null
+    return EMPTY_STATE
   }
 }
 
-/** Persists (or clears, for null) the bookmark; false when storage refused. */
+/** Persists the sync state, a removal as a timestamped tombstone. False when
+ *  storage refused. */
+export function writeBookmarkState(storage, { bookmark, updatedAt, syncedAt }) {
+  try {
+    if (!storage) return false
+    const clocks = { updatedAt: toTime(updatedAt), syncedAt: toTime(syncedAt) || null }
+    if (!bookmark && !clocks.updatedAt && !clocks.syncedAt) storage.removeItem(BOOKMARK_KEY)
+    else storage.setItem(BOOKMARK_KEY, JSON.stringify(bookmark ? { ...makeBookmark(bookmark), ...clocks } : { cleared: true, ...clocks }))
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** A local set (bookmark) or remove (null), stamped strictly after both the
+ *  previous edit and the last synced server time. */
+export function stampBookmark(prev, bookmark, now) {
+  return {
+    bookmark,
+    updatedAt: Math.max(toTime(now), toTime(prev?.updatedAt) + 1, toTime(prev?.syncedAt) + 1),
+    syncedAt: prev?.syncedAt ?? null,
+  }
+}
+
+/** Account row (from getBookmark) as { bookmark, updatedAt }, or null for no
+ *  row. A null or unknown book reads as cleared. */
+export function serverBookmarkState(row, options) {
+  if (!row) return null
+  const bookmark = row.book == null ? null : sanitizeBookmark(row, options)
+  return { bookmark, updatedAt: toTime(row.updatedAt) }
+}
+
+/** Newest-wins merge of the local state with the account state.
+ *  action: 'push'  — local is newer (or the account has nothing): upload next;
+ *          'adopt' — the account is newer: show and store next;
+ *          'none'  — nothing to do.
+ *  With no account row, a local value that was never synced (or edited since
+ *  its last sync) is uploaded; one that was synced before means the row was
+ *  removed (an older client deletes on remove, or the account was reset), so
+ *  the removal is adopted. */
+export function mergeBookmark(local, server) {
+  const state = local ?? EMPTY_STATE
+  if (!server) {
+    const pending = state.syncedAt == null || state.updatedAt > state.syncedAt
+    if (pending) return { next: state, action: state.bookmark ? 'push' : 'none' }
+    return { next: { bookmark: null, updatedAt: state.updatedAt, syncedAt: null }, action: state.bookmark ? 'adopt' : 'none' }
+  }
+  if (state.updatedAt > server.updatedAt) return { next: state, action: 'push' }
+  if (state.syncedAt === server.updatedAt && state.updatedAt === server.updatedAt) return { next: state, action: 'none' }
+  return { next: { bookmark: server.bookmark, updatedAt: server.updatedAt, syncedAt: server.updatedAt }, action: 'adopt' }
+}
+
+/** Throttle for refreshing on focus/visibility. */
+export function shouldRefresh(lastFetchMs, nowMs, minGapMs) {
+  return !lastFetchMs || nowMs - lastFetchMs >= minGapMs
+}
+
+export function readBookmark(storage, options) {
+  return readBookmarkState(storage, options).bookmark
+}
+
+/** Untimed write of a bare bookmark (or removal of the key, for null); the
+ *  reader uses writeBookmarkState so removals stay synced. False when storage
+ *  refused. */
 export function writeBookmark(storage, bookmark) {
   try {
     if (!storage) return false
