@@ -1,6 +1,7 @@
-// Tests for the stock-photo daily background: query building, the licence and
-// content filters, the deterministic no-repeat pick, attribution, and provider
-// selection. Every network call is a stub — nothing here touches a real API.
+// Tests for the stock-image daily background: query building and styling, the
+// licence and content filters, the deterministic no-repeat pick, attribution,
+// and provider selection. Every network call is a stub — nothing here touches a
+// real API.
 //
 // Run: npm run background:test
 import test from 'node:test'
@@ -10,6 +11,7 @@ import {
   normalizePixabay, normalizeOpenverse, isAllowedLicense, rejectionReason,
   isSuitableCandidate, rankCandidates, pickCandidate, buildAttribution, creditLine,
   findBackground, downloadImage, searchOpenverse, searchPixabay, minShortSide, redact,
+  styleQueries, STYLE_TERM, PIXABAY_IMAGE_TYPE, OPENVERSE_CATEGORY,
 } from './stockBackground.js'
 import { THEMES as BACKGROUND_THEMES, toBackgroundRow, themeForDate } from './background.js'
 import { THEMES as DEVOTION_THEMES } from './themes.js'
@@ -91,9 +93,46 @@ test('every devotion and background theme has a visual phrase', () => {
 })
 
 test('queries never ask for people or text', () => {
-  for (const phrase of [...Object.values(THEME_QUERIES), GENERIC_QUERY]) {
+  for (const phrase of [...Object.values(THEME_QUERIES), GENERIC_QUERY, STYLE_TERM]) {
     assert.equal(rejectionReason(candidate('x', { text: phrase })), null, phrase)
   }
+})
+
+test('theme phrases and the generic fallback have 2-4 keywords', () => {
+  for (const phrase of [...Object.values(THEME_QUERIES), GENERIC_QUERY]) {
+    const n = phrase.split(' ').length
+    assert.ok(n >= 2 && n <= 4, `"${phrase}" has ${n} keywords`)
+  }
+})
+
+test('styleQueries tries each query with the style word first, then plain', () => {
+  assert.equal(STYLE_TERM, 'minimalist')
+  assert.deepEqual(styleQueries(['calm lake', 'misty mountains landscape']), [
+    'calm lake minimalist', 'calm lake',
+    'misty mountains landscape minimalist', 'misty mountains landscape',
+  ])
+})
+
+test('styleQueries drops duplicates and keeps an already-styled query as is', () => {
+  assert.deepEqual(styleQueries(['calm lake', 'calm lake']), ['calm lake minimalist', 'calm lake'])
+  assert.deepEqual(styleQueries(['minimalist hills', 'hills']), ['minimalist hills', 'hills minimalist', 'hills'])
+  assert.deepEqual(styleQueries([]), [])
+})
+
+test('styled builder queries stay within the Pixabay query limit', () => {
+  for (const d of [DEVOTION, null, { theme: 'courage' }, { title: 'Light in the storm' }]) {
+    for (const q of styleQueries(buildImageQueries(d, '2026-10-05'))) {
+      assert.ok(q.length <= 100, q)
+      assert.ok(q.split(' ').length <= 5, q)
+    }
+  }
+})
+
+test('the people deny-list still rejects people silhouettes', () => {
+  // "silhouette" stays deny-listed: on stock sites it is mostly people against
+  // a sunset. Landscape illustrations tagged only with hills and mist pass.
+  assert.equal(rejectionReason(candidate('x', { text: 'mountain silhouette sunset' })), 'mentions "silhouette"')
+  assert.equal(rejectionReason(candidate('x', { text: 'minimalist misty hills layers' })), null)
 })
 
 // --- Normalisers -----------------------------------------------------------
@@ -276,24 +315,26 @@ const OPENVERSE_BODY = {
   }],
 }
 
-test('openverse search asks only for CC0/PDM photographs, non-mature', async () => {
+test('openverse search asks only for CC0/PDM illustrations, non-mature', async () => {
   const fetchImpl = stubFetch(() => jsonResponse(OPENVERSE_BODY))
   await searchOpenverse('calm lake', { fetchImpl })
   const url = new URL(fetchImpl.calls[0].url)
   assert.equal(url.searchParams.get('license'), 'cc0,pdm')
-  assert.equal(url.searchParams.get('category'), 'photograph')
+  assert.equal(OPENVERSE_CATEGORY, 'illustration')
+  assert.equal(url.searchParams.get('category'), 'illustration')
   assert.equal(url.searchParams.get('mature'), 'false')
   assert.equal(url.searchParams.get('q'), 'calm lake')
 })
 
-test('pixabay search sends the key and asks for large, safe, vertical photos', async () => {
+test('pixabay search sends the key and asks for large, safe, vertical illustrations', async () => {
   const fetchImpl = stubFetch(() => jsonResponse(PIXABAY_BODY))
   await searchPixabay('calm lake', { apiKey: SENTINEL_KEY, fetchImpl })
   const url = new URL(fetchImpl.calls[0].url)
   assert.equal(url.origin + url.pathname, 'https://pixabay.com/api/')
   assert.equal(url.searchParams.get('key'), SENTINEL_KEY)
   assert.equal(url.searchParams.get('q'), 'calm lake')
-  assert.equal(url.searchParams.get('image_type'), 'photo')
+  assert.equal(PIXABAY_IMAGE_TYPE, 'illustration')
+  assert.equal(url.searchParams.get('image_type'), 'illustration')
   assert.equal(url.searchParams.get('orientation'), 'vertical')
   assert.equal(url.searchParams.get('safesearch'), 'true')
   assert.equal(url.searchParams.get('order'), 'popular')
@@ -376,7 +417,8 @@ test('a Pixabay pick records its attribution', async () => {
     creatorUrl: 'https://pixabay.com/users/P-3/',
     license: 'Pixabay Content License',
     licenseUrl: 'https://pixabay.com/service/license-summary/',
-    query: 'calm lake',
+    // The styled query is tried first and matched, so it is what is recorded.
+    query: 'calm lake minimalist',
     fetchedAt: '2026-10-05T00:00:00.000Z',
   })
   assert.equal(`stock:${a.provider}`, 'stock:pixabay')
@@ -450,6 +492,35 @@ test('an empty query widens to the next one', async () => {
   const fetchImpl = stubFetch((url) => jsonResponse(new URL(url).searchParams.get('q') === 'broad' ? OPENVERSE_BODY : { results: [] }))
   const found = await findBackground({ queries: ['narrow', 'broad'], dateISO: '2026-10-05', fetchImpl })
   assert.equal(found.query, 'broad')
+})
+
+test('the styled query is sent first and recorded when it matches', async () => {
+  const fetchImpl = stubFetch(() => jsonResponse(PIXABAY_BODY))
+  const found = await findBackground({ queries: ['calm lake'], dateISO: '2026-10-05', pixabayApiKey: SENTINEL_KEY, fetchImpl })
+  assert.equal(new URL(fetchImpl.calls[0].url).searchParams.get('q'), 'calm lake minimalist')
+  assert.equal(fetchImpl.calls.length, 1)
+  assert.equal(found.query, 'calm lake minimalist')
+})
+
+test('an empty styled query falls through to the plain query, not the next one', async () => {
+  const fetchImpl = stubFetch((url) => jsonResponse(new URL(url).searchParams.get('q') === 'calm lake' ? PIXABAY_BODY : { hits: [] }))
+  const found = await findBackground({
+    queries: ['calm lake', 'misty mountains landscape'], dateISO: '2026-10-05', pixabayApiKey: SENTINEL_KEY, fetchImpl,
+  })
+  assert.deepEqual(fetchImpl.calls.map((c) => new URL(c.url).searchParams.get('q')), ['calm lake minimalist', 'calm lake'])
+  assert.equal(found.provider, 'pixabay')
+  assert.equal(found.query, 'calm lake')
+})
+
+test('every query is tried styled then plain, in order, before the next provider', async () => {
+  const fetchImpl = stubFetch((url) => jsonResponse(isPixabay(url) ? { hits: [] } : { results: [] }))
+  const found = await findBackground({ queries: ['a b', 'c d'], dateISO: '2026-10-05', pixabayApiKey: SENTINEL_KEY, fetchImpl })
+  assert.equal(found, null)
+  const sent = fetchImpl.calls.map((c) => `${isPixabay(c.url) ? 'pixabay' : 'openverse'}:${new URL(c.url).searchParams.get('q')}`)
+  assert.deepEqual(sent, [
+    'pixabay:a b minimalist', 'pixabay:a b', 'pixabay:c d minimalist', 'pixabay:c d',
+    'openverse:a b minimalist', 'openverse:a b', 'openverse:c d minimalist', 'openverse:c d',
+  ])
 })
 
 test('null when every provider fails or returns nothing usable', async () => {

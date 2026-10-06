@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-// SELAH daily background from stock photography.
+// SELAH daily background from a stock image search.
 //
-// Finds ONE freely-licensed photo matching the day's devotion, processes it to
+// Finds ONE freely-licensed minimalist atmospheric landscape illustration
+// matching the day's devotion, processes it to
 // the 1080x1920 WebP every background uses, stores it in Firebase Storage and
 // writes the daily_backgrounds row the app reads — the same path, format and
 // row as generate-daily-background.js and upload-background.js, plus the
-// photo's attribution.
+// image's attribution.
 //
 // Search: Pixabay when PIXABAY_API_KEY is set, Openverse (no key, CC0 and
 // Public Domain Mark only) otherwise or when Pixabay fails. Keywords come from

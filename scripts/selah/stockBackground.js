@@ -1,12 +1,16 @@
-// Logic for the SELAH daily background when it comes from stock photography
+// Logic for the SELAH daily background when it comes from a stock image search
 // rather than an image model: which words to search for, which results are
 // allowed, which one a date gets, and the credit that goes with it.
+//
+// The look is a minimalist atmospheric landscape illustration — layered hills,
+// haze, calm sea, soft light — so both providers are asked for illustrations,
+// not photographs, and every query is tried with a style word first.
 //
 // No filesystem and no Supabase. The only network access is through an
 // injected `fetchImpl`, so every path — including provider failure and the
 // Pixabay-to-Openverse fallback — is tested with stubs (npm run background:test).
 //
-// LICENSING IS THE POINT OF THIS FILE. Only photos whose licence allows free
+// LICENSING IS THE POINT OF THIS FILE. Only images whose licence allows free
 // commercial use without asking are ever accepted: the Pixabay Content License,
 // CC0 and the Public Domain Mark. CC-BY is refused even though it is "free", because it
 // requires a credit on every shared card, and the 1080x1920 card carries none.
@@ -35,42 +39,53 @@ const PROVIDER_LABELS = { pixabay: 'Pixabay', openverse: 'Openverse' }
 /** Pixabay's licence as recorded in the attribution. */
 export const PIXABAY_LICENSE = 'Pixabay Content License'
 
-/** How many past days a photo may not be reused within. */
+/** How many past days an image may not be reused within. */
 export const NO_REPEAT_DAYS = 30
 
 /**
  * Visual search phrases for each theme, devotion palette and background
- * rotation alike. Abstract words ("grace", "faith") return stock photos of
- * people praying or holding hands, so each theme is translated into the
- * landscape or light that carries its mood instead.
+ * rotation alike. Abstract words ("grace", "faith") return images of people
+ * praying or holding hands, so each theme is translated into the atmospheric
+ * landscape that carries its mood instead: wide, hazy, few elements.
  */
 export const THEME_QUERIES = {
-  peace: 'calm lake mist',
-  joy: 'sunlit meadow flowers',
+  peace: 'misty lake landscape',
+  joy: 'meadow hills sunrise',
   hope: 'sunrise over hills',
   faith: 'light through clouds',
-  gratitude: 'golden wheat field',
-  rest: 'quiet forest stream',
+  gratitude: 'golden field landscape',
+  rest: 'misty forest landscape',
   courage: 'mountain peak dawn',
-  stillness: 'still lake reflection',
-  grace: 'soft sunlight clouds',
-  light: 'sun rays forest',
-  renewal: 'spring leaves dew',
+  stillness: 'still lake mist',
+  grace: 'soft clouds sky',
+  light: 'sun rays mountains',
+  renewal: 'spring hills landscape',
   trust: 'calm sea horizon',
-  wisdom: 'old tree mountain',
+  wisdom: 'lone tree hills',
   "god's creation": 'mountain valley landscape',
-  morning: 'morning mist field',
-  evening: 'evening sky sunset',
+  morning: 'morning mist hills',
+  evening: 'evening sunset hills',
   mountains: 'misty mountains',
-  ocean: 'ocean waves shore',
-  forest: 'forest light trees',
-  sky: 'blue sky clouds',
+  ocean: 'calm ocean horizon',
+  forest: 'misty forest hills',
+  sky: 'sky clouds landscape',
   sunrise: 'sunrise landscape',
-  'gentle rain': 'rain drops leaves',
+  'gentle rain': 'rainy misty landscape',
 }
 
-/** Last resort when nothing more specific returns a usable photo. */
-export const GENERIC_QUERY = 'nature landscape sunrise'
+/** Last resort when nothing more specific returns a usable image. */
+export const GENERIC_QUERY = 'misty mountains landscape'
+
+/**
+ * Added to each query, tried before the plain query. Keyword search ANDs its
+ * terms, so the plain query is always kept as the fallback: the style word
+ * steers the pick, it never empties the pool.
+ */
+export const STYLE_TERM = 'minimalist'
+
+/** What each provider is asked for: illustrations, never photographs. */
+export const PIXABAY_IMAGE_TYPE = 'illustration'
+export const OPENVERSE_CATEGORY = 'illustration'
 
 /**
  * Nature words worth lifting straight out of the devotion text. Scripture is
@@ -177,6 +192,23 @@ export function buildImageQueries(devotion, dateISO) {
 
 export function buildImageQuery(devotion, dateISO) {
   return buildImageQueries(devotion, dateISO)[0]
+}
+
+/**
+ * Each query with STYLE_TERM added, then the query itself, in the given order
+ * and without duplicates. A query that already has the style word is kept as
+ * it is.
+ *
+ * @param {string[]} queries
+ * @returns {string[]}
+ */
+export function styleQueries(queries) {
+  const out = []
+  for (const q of queries) {
+    const styled = words(q).includes(STYLE_TERM) ? q : `${q} ${STYLE_TERM}`
+    for (const v of [styled, q]) if (!out.includes(v)) out.push(v)
+  }
+  return out
 }
 
 // --- Candidates ------------------------------------------------------------
@@ -372,7 +404,7 @@ export async function searchPixabay(query, { apiKey, fetchImpl = fetch, timeoutM
   url.search = new URLSearchParams({
     key: apiKey,
     q: String(query).slice(0, 100),
-    image_type: 'photo',
+    image_type: PIXABAY_IMAGE_TYPE,
     orientation: 'vertical',
     safesearch: 'true',
     order: 'popular',
@@ -389,7 +421,7 @@ export async function searchOpenverse(query, { fetchImpl = fetch, timeoutMs = 15
   url.search = new URLSearchParams({
     q: query,
     license: ALLOWED_LICENSES.openverse.join(','),
-    category: 'photograph',
+    category: OPENVERSE_CATEGORY,
     size: 'large',
     mature: 'false',
     page_size: '20',
@@ -399,8 +431,9 @@ export async function searchOpenverse(query, { fetchImpl = fetch, timeoutMs = 15
 }
 
 /**
- * Finds the day's photo: Pixabay when a key is set, then Openverse, trying each
- * query from most to least specific until one returns a usable candidate.
+ * Finds the day's image: Pixabay when a key is set, then Openverse, trying each
+ * query from most to least specific — styled first, then plain (styleQueries) —
+ * until one returns a usable candidate. `query` is the exact one that matched.
  *
  * A provider that errors is skipped, not fatal — a dead Pixabay key must still
  * leave the keyless path working.
@@ -415,7 +448,7 @@ export async function findBackground({
   providers.push(['openverse', (q) => searchOpenverse(q, { fetchImpl })])
 
   for (const [provider, search] of providers) {
-    for (const query of queries) {
+    for (const query of styleQueries(queries)) {
       let candidates
       try {
         candidates = await search(query)

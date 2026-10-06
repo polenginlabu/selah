@@ -248,10 +248,12 @@ Scripture card: the verse, its reference, the translation, the SELAH wordmark,
 and the day's background image.
 
 Every night, right after the devotion is written, the *Daily devotion* workflow
-fetches that day's background: a **freely-licensed stock photograph** whose
+fetches that day's background: a **freely-licensed minimalist atmospheric
+landscape illustration** (layered hills, haze, calm sea, soft light) whose
 subject matches the devotion. No image is generated and no browser automation is
-involved — the photo comes from an official image search API with its licence
-metadata attached.
+involved — the image comes from an official image search API with its licence
+metadata attached. Images already stored, including earlier stock photographs,
+are left as they are.
 
 The governing rule of this feature:
 
@@ -285,9 +287,11 @@ photo.
 **Matching the devotion.** Keywords come from the day's `daily_devotions` row.
 Nature words in the title and key verse are used first ("beside still waters" →
 `lake`, "green pastures" → `meadow`), filled out with a landscape phrase for the
-devotion's theme (`rest` → *quiet forest stream*), because abstract words like
-"grace" return photos of people. If a precise query finds nothing usable the
-script widens to the theme phrase, then to a generic sunrise landscape. With no
+devotion's theme (`rest` → *misty forest landscape*), because abstract words like
+"grace" return images of people. Each query is tried first with the style word
+`minimalist` and then without it, because keyword search ANDs its terms. If a
+precise query finds nothing usable the script widens to the theme phrase, then
+to a generic misty mountain landscape. With no
 devotion for the date it uses the date's rotating theme. Logic and tests:
 `scripts/selah/stockBackground.js`.
 
@@ -295,11 +299,12 @@ devotion for the date it uses the date's rotating theme. Logic and tests:
 credit on the shared image are accepted: the **Pixabay Content License**,
 **CC0** and the **Public Domain Mark**. CC-BY and other attribution-required
 licences are refused, because the shared card carries no credit. Pixabay is
-queried with `image_type=photo`, `orientation=vertical`, `safesearch=true` and a
-1080×1920 minimum original size; its `largeImageURL` (1280px on the long side)
-is downloaded, upscaled to the card and served from Firebase, never hotlinked.
-Openverse is queried with `license=cc0,pdm`, `category=photograph`,
-`mature=false`.
+queried with `image_type=illustration`, `orientation=vertical`, `safesearch=true`
+and a 1080×1920 minimum original size; its `largeImageURL` (1280px on the long
+side) is downloaded, upscaled to the card and served from Firebase, never
+hotlinked. Openverse is queried with `license=cc0,pdm`, `category=illustration`,
+`mature=false`. The CC0/PDM illustration pool on Openverse is small, so set
+`PIXABAY_API_KEY` for reliable daily results.
 
 **Attribution.** Each row stores `attribution` (provider, source id and page,
 photographer, licence and licence URL, search query, fetch time); the same
