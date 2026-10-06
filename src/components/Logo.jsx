@@ -30,8 +30,15 @@ export function PauseMark({ size = 24, color = 'currentColor', accent = '#4F6EF7
  */
 export function Logo({ size = 24, className = '', ...props }) {
   return (
-    <span className={`inline-flex items-center ${className}`} style={{ gap: size * 0.32 }} {...props}>
-      <PauseMark size={size} color="oklch(var(--ink))" accent="oklch(var(--brand))" />
+    <span className={`inline-flex items-center ${className}`} {...props}>
+      {/* The bars sit centred in a square viewBox, leaving ~0.345×size of empty space on
+          the right; the negative margin trims that to a ~0.27×size mark-to-wordmark gap. */}
+      <PauseMark
+        size={size}
+        color="oklch(var(--ink))"
+        accent="oklch(var(--brand))"
+        style={{ marginRight: -size * 0.075 }}
+      />
       {/* 0.65 keeps the mark-to-wordmark proportion of the Figma lockup. */}
       <span
         className="font-display font-extrabold leading-none tracking-[-0.03em] text-ink"
