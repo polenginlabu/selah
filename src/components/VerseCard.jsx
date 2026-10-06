@@ -4,6 +4,7 @@ import { useToast } from '../context/ToastContext'
 import { listBackgrounds } from '../data/dailyBackgrounds'
 import { DownloadIcon, ShareIcon } from '../icons'
 import { CARD_WIDTH, CARD_HEIGHT, MARGIN_X, layoutCard, quoteVerse } from '../lib/verseCardLayout'
+import { photoCredit } from '../lib/photoCredit'
 
 // The shareable Scripture card.
 //
@@ -338,14 +339,6 @@ export function VerseCardSheet({ selection, translation, onClose }) {
       </div>
     </BibleReaderSheet>
   )
-}
-
-const PHOTO_PROVIDERS = { pixabay: 'Pixabay', openverse: 'Openverse' }
-
-/** "Photo: Jane Doe · Pixabay" — matches creditLine() in scripts/selah/stockBackground.js. */
-function photoCredit(attribution) {
-  const provider = PHOTO_PROVIDERS[attribution.provider] ?? attribution.provider
-  return `Photo: ${attribution.creator || 'Unknown'} · ${provider}`
 }
 
 function download(blob, filename) {

@@ -1,25 +1,30 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { getDevotionForDate, getTodayDevotion } from '../data/dailyDevotion'
 import { todayISO } from '../lib/date'
-import { ChevronLeftIcon, ShareIcon, CheckIcon } from '../icons'
+import { buildStorySections, nextSectionIndex } from '../lib/devotionStory'
+import { photoCredit, photoCreditHref } from '../lib/photoCredit'
+import { useDailyBackground } from '../lib/useDailyBackground'
+import { GoldDust } from '../components/GoldDust'
+import { StoryBackdrop } from '../components/StoryBackdrop'
+import { ChevronDownIcon, ChevronLeftIcon, ShareIcon, CheckIcon } from '../icons'
 import heroImage from '../assets/devotion-hero.jpg'
 
-// The sticky tab bar sits directly under Layout's sticky header. That header is
-// 34px of content plus py-3 and a hairline border, so anything that has to clear
-// it needs this offset — the tab bar's `top`, and every section's scroll margin
-// so an anchored jump does not land underneath both bars.
-const HEADER_H = 59
-const TAB_H = 45
-const SCROLL_MARGIN = HEADER_H + TAB_H + 8
+// Visible focus on the dark reader: the app's brand ring is blue on navy, so
+// the reader uses the same warm gold as the dust.
+const FOCUS =
+  'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-200'
 
-const SECTIONS = [
-  { id: 'read', label: 'Read' },
-  { id: 'reflect', label: 'Reflect' },
-  { id: 'apply', label: 'Apply' },
-  { id: 'pray', label: 'Pray' },
-  { id: 'selah', label: 'Selah' },
-]
+// Every section after the first fades up once, the first time it scrolls into
+// view. Content is visible by default: sections are only marked unrevealed once
+// the observer is running, so a missing IntersectionObserver never hides text.
+const REVEAL =
+  'transition-[opacity,transform] duration-700 ease-out-expo group-data-[revealed=false]/section:translate-y-4 group-data-[revealed=false]/section:opacity-0'
+
+const EYEBROW = 'font-sans text-[0.7rem] font-bold uppercase tracking-[0.16em] text-amber-200'
+const H2 = 'mt-2 font-display text-[1.6rem] font-extrabold leading-[1.15] tracking-[-0.035em] text-white text-balance'
+const BODY = 'font-sans text-[1.02rem] leading-[1.85] text-white/90 text-pretty'
 
 /**
  * Per-device reading state: which questions the reader has ticked, and whether
@@ -76,12 +81,8 @@ export default function DailyDevotion() {
   const date = dateParam ?? todayISO()
 
   const [devotion, setDevotion] = useState(undefined)
-  const [progress, setProgress] = useState(0)
-  const [activeSection, setActiveSection] = useState('read')
-  const [prayerOpen, setPrayerOpen] = useState(false)
-
-  const sectionRefs = useRef({})
-  const { checked, completed, toggleQuestion, toggleCompleted } = useReadingState(date)
+  const reading = useReadingState(date)
+  const background = useDailyBackground(date)
 
   useEffect(() => {
     let alive = true
@@ -97,43 +98,6 @@ export default function DailyDevotion() {
     }
   }, [dateParam])
 
-  // Reading progress, and which tab to highlight. Both derive from one scroll
-  // listener because they answer the same question.
-  useEffect(() => {
-    if (!devotion) return
-
-    const onScroll = () => {
-      const scrollable = document.documentElement.scrollHeight - window.innerHeight
-      setProgress(scrollable > 0 ? Math.min(100, Math.round((window.scrollY / scrollable) * 100)) : 0)
-
-      // The section whose top has most recently passed under the bars is the
-      // one being read. Walking backwards means the last match wins without
-      // needing to special-case the final section.
-      const line = window.scrollY + SCROLL_MARGIN + 16
-      for (let i = SECTIONS.length - 1; i >= 0; i -= 1) {
-        const el = sectionRefs.current[SECTIONS[i].id]
-        if (el && el.offsetTop <= line) {
-          setActiveSection(SECTIONS[i].id)
-          return
-        }
-      }
-      setActiveSection(SECTIONS[0].id)
-    }
-
-    onScroll()
-    window.addEventListener('scroll', onScroll, { passive: true })
-    return () => window.removeEventListener('scroll', onScroll)
-  }, [devotion])
-
-  const scrollTo = (id) => {
-    const el = sectionRefs.current[id]
-    if (!el) return
-    // The reduced-motion rule in index.css cannot reach a scroll driven by
-    // script, so ask for the preference directly.
-    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-    window.scrollTo({ top: el.offsetTop - SCROLL_MARGIN, behavior: reduced ? 'auto' : 'smooth' })
-  }
-
   const share = async () => {
     const url = window.location.href
     try {
@@ -147,230 +111,290 @@ export default function DailyDevotion() {
     }
   }
 
-  const paragraphs = useMemo(() => splitProse(devotion?.thought), [devotion?.thought])
-  const prayerParagraphs = useMemo(() => splitProse(devotion?.prayer), [devotion?.prayer])
+  // The reader covers the app's header and nav, so Back must always land in
+  // the app. A shared link opens /daily as the first entry of the tab, where
+  // there is nothing in-app to go back to; React Router numbers its entries
+  // in history.state.idx, and 0 (or none) means this is that first entry.
+  const back = () => {
+    if ((window.history.state?.idx ?? 0) > 0) navigate(-1)
+    else navigate('/', { replace: true })
+  }
 
   if (devotion === undefined) return <ReaderSkeleton />
   if (!devotion) return <NotReadyYet date={date} isToday={!dateParam} />
 
+  return (
+    <DevotionStory
+      devotion={devotion}
+      date={date}
+      background={background}
+      reading={reading}
+      onBack={back}
+      onShare={share}
+    />
+  )
+}
+
+function prefersReducedMotion() {
+  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+}
+
+/**
+ * The devotional as a vertical story: one full screen per section, snapping,
+ * over the day's photo and a layer of drifting gold dust.
+ *
+ * Rendered into <body> as a fixed full-screen layer. Layout's <main> runs the
+ * `rise` animation, and while a transform is animating it becomes the
+ * containing block for position:fixed descendants — the reader would open
+ * inside the page column and jump to full screen half a second later. The app
+ * root is made inert underneath so Tab cannot wander into the hidden header and
+ * nav; Back is the way out.
+ */
+function DevotionStory({ devotion, date, background, reading, onBack, onShare }) {
+  const sections = useMemo(() => buildStorySections(devotion), [devotion])
+  const { checked, completed, toggleQuestion, toggleCompleted } = reading
+
+  const scrollerRef = useRef(null)
+  const sectionEls = useRef([])
+  const [active, setActive] = useState(0)
+  const [revealed, setRevealed] = useState(() => new Set([0]))
+  const [observing, setObserving] = useState(false)
+
+  useEffect(() => {
+    const app = document.getElementById('root')
+    if (!app || app.inert) return
+    app.inert = true
+    return () => {
+      app.inert = false
+    }
+  }, [])
+
+  // Arrow keys work straight away, without a first click into the page.
+  useEffect(() => {
+    scrollerRef.current?.focus({ preventScroll: true })
+  }, [])
+
+  useEffect(() => {
+    const root = scrollerRef.current
+    if (!root || typeof IntersectionObserver === 'undefined') return
+    const els = sectionEls.current.slice(0, sections.length).filter(Boolean)
+    const indexOf = (el) => Number(el.dataset.index)
+
+    // The section crossing a line just above the middle of the screen is the
+    // one being read. A line rather than a ratio, because a section taller
+    // than the screen can never be half visible.
+    const activeObserver = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) if (entry.isIntersecting) setActive(indexOf(entry.target))
+      },
+      { root, rootMargin: '-45% 0px -55% 0px', threshold: 0 }
+    )
+    const revealObserver = new IntersectionObserver(
+      (entries) => {
+        const seen = entries.filter((e) => e.isIntersecting).map((e) => indexOf(e.target))
+        if (seen.length === 0) return
+        setRevealed((prev) => {
+          if (seen.every((i) => prev.has(i))) return prev
+          const next = new Set(prev)
+          for (const i of seen) next.add(i)
+          return next
+        })
+      },
+      // Revealed once its top clears the bottom fifth of the screen. A margin
+      // rather than a ratio, because a section several screens tall never
+      // reaches a fixed fraction of itself in view and would stay hidden.
+      { root, rootMargin: '0px 0px -20% 0px', threshold: 0 }
+    )
+    for (const el of els) {
+      activeObserver.observe(el)
+      revealObserver.observe(el)
+    }
+    setObserving(true)
+    return () => {
+      activeObserver.disconnect()
+      revealObserver.disconnect()
+    }
+  }, [sections])
+
+  const goTo = useCallback((index, { focus = false } = {}) => {
+    const root = scrollerRef.current
+    const el = sectionEls.current[index]
+    if (!root || !el) return
+    // The reduced-motion rule in index.css cannot reach a scroll driven by
+    // script, so ask for the preference directly.
+    root.scrollTo({ top: el.offsetTop, behavior: prefersReducedMotion() ? 'auto' : 'smooth' })
+    if (focus) el.focus({ preventScroll: true })
+  }, [])
+
+  const onKeyDown = (e) => {
+    if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return
+    const target = e.target
+    if (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
+
+    const next = nextSectionIndex(e.key, active, sections.length)
+    if (next === null) return
+
+    // Arrows read through a section taller than the screen before moving on,
+    // so no text is skipped. Page keys and Home/End always jump.
+    const root = scrollerRef.current
+    const el = sectionEls.current[active]
+    if (root && el && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      const top = el.offsetTop - root.scrollTop
+      const bottom = top + el.offsetHeight
+      const step = root.clientHeight * 0.8
+      const behavior = prefersReducedMotion() ? 'auto' : 'smooth'
+      if (e.key === 'ArrowDown' && bottom > root.clientHeight + 8) {
+        e.preventDefault()
+        root.scrollBy({ top: Math.min(step, bottom - root.clientHeight), behavior })
+        return
+      }
+      if (e.key === 'ArrowUp' && top < -8) {
+        e.preventDefault()
+        root.scrollBy({ top: -Math.min(step, -top), behavior })
+        return
+      }
+    }
+
+    e.preventDefault()
+    goTo(next)
+  }
+
   const answered = checked.size
   const total = devotion.questions.length
   const pct = total > 0 ? Math.round((answered / total) * 100) : 0
+  const credit = photoCredit(background?.attribution)
+  const creditHref = photoCreditHref(background?.attribution)
 
-  return (
-    <div className="-mx-4 -mt-6">
-      {/* Reading progress. Fixed so it tracks the whole page, not the hero. */}
-      <div
-        className="fixed inset-x-0 top-0 z-modal mx-auto h-0.5 max-w-xl bg-transparent"
-        aria-hidden="true"
-      >
-        <div
-          className="h-full rounded-r bg-gradient-to-r from-brand-strong to-accent transition-[width] duration-200"
-          style={{ width: `${progress}%` }}
-        />
-      </div>
-
-      {/* --- Hero ------------------------------------------------------------
-          The photograph is bundled rather than hot-linked. The app is an
-          installable PWA that has to render offline, and a remote hero would be
-          the one broken element every time it opens without a connection.
-          Imported so Vite fingerprints it and the service worker can cache it. */}
-      <header className="relative overflow-hidden bg-panel px-6 pb-8 pt-10">
-        <img
-          src={heroImage}
-          alt=""
-          aria-hidden="true"
-          loading="eager"
-          fetchPriority="high"
-          className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-35"
-          style={{ objectPosition: 'center 30%' }}
-        />
-        {/* Darkens the lower half so the title keeps its contrast wherever the
-            photograph happens to be bright. */}
-        <div
-          className="pointer-events-none absolute inset-0"
-          style={{
-            background:
-              'linear-gradient(to bottom, oklch(var(--panel) / 0.45) 0%, oklch(var(--panel) / 0.92) 100%)',
-          }}
-          aria-hidden="true"
-        />
-        <div
-          className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full opacity-60"
-          style={{ background: 'radial-gradient(circle, oklch(var(--brand) / 0.35) 0%, transparent 70%)' }}
-          aria-hidden="true"
-        />
-
-        <div className="relative flex items-start justify-between gap-3">
-          <button
-            onClick={() => navigate(-1)}
-            aria-label="Go back"
-            className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white backdrop-blur transition-colors hover:bg-white/20"
-          >
-            <ChevronLeftIcon width={18} height={18} />
-          </button>
-          <button
-            onClick={share}
-            aria-label="Share this devotional"
-            className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white backdrop-blur transition-colors hover:bg-white/20"
-          >
-            <ShareIcon width={16} height={16} />
-          </button>
-        </div>
-
-        <div className="relative mt-6">
-          <div className="flex flex-wrap items-center gap-2.5">
-            <span className="rounded-full bg-brand px-3 py-1 font-sans text-[0.65rem] font-bold uppercase tracking-[0.12em] text-on-brand">
-              {devotion.topic.label}
-            </span>
-            {devotion.themeLabel && (
-              <span className="rounded-full bg-white/10 px-3 py-1 font-sans text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-white/85">
-                {devotion.themeLabel}
+  const renderSection = (section) => {
+    const headingId = `${section.id}-heading`
+    switch (section.kind) {
+      case 'scripture':
+        return (
+          <>
+            <div className="animate-story-in motion-reduce:animate-none flex flex-wrap items-center gap-2" style={{ animationDelay: '80ms' }}>
+              <span className="rounded-full bg-amber-200 px-3 py-1 font-sans text-[0.65rem] font-bold uppercase tracking-[0.12em] text-panel">
+                {devotion.topic.label}
               </span>
-            )}
-            <span className="font-sans text-xs text-white/50">{formatLongDate(date)}</span>
-          </div>
-          <h1 className="mt-3 font-display text-[1.7rem] font-extrabold leading-[1.12] tracking-[-0.04em] text-white text-balance">
-            {devotion.title}
-          </h1>
-          <p className="mt-2 font-sans text-[0.82rem] text-white/60">
-            {devotion.keyScripture}
-            {devotion.keyScriptureTranslation && ` · ${devotion.keyScriptureTranslation}`}
-          </p>
-        </div>
-      </header>
-
-      {/* --- Section tabs --------------------------------------------------- */}
-      <nav
-        className="sticky z-sticky border-b border-line bg-surface/95 backdrop-blur-xl"
-        style={{ top: HEADER_H }}
-        aria-label="Devotional sections"
-      >
-        <div className="flex gap-0 overflow-x-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {SECTIONS.map((section) => {
-            const active = activeSection === section.id
-            return (
-              <button
-                key={section.id}
-                onClick={() => scrollTo(section.id)}
-                aria-current={active ? 'true' : undefined}
-                className={`shrink-0 border-b-2 px-4 py-3 font-sans text-[0.78rem] font-semibold transition-colors ${
-                  active
-                    ? 'border-brand text-brand-strong dark:text-brand'
-                    : 'border-transparent text-muted hover:text-ink'
-                }`}
-              >
-                {section.label}
-              </button>
-            )
-          })}
-        </div>
-      </nav>
-
-      <div className="px-4 pb-10">
-        {/* --- Key scripture ------------------------------------------------ */}
-        <section className="relative mt-6 overflow-hidden rounded-2xl bg-panel p-7">
-          <div
-            className="pointer-events-none absolute -right-8 -top-8 h-36 w-36 rounded-full"
-            style={{ background: 'radial-gradient(circle, oklch(var(--brand) / 0.3) 0%, transparent 70%)' }}
-            aria-hidden="true"
-          />
-          <div className="relative">
-            <span className="block font-sans text-5xl leading-none text-brand opacity-60" aria-hidden="true">
-              &ldquo;
-            </span>
-            <blockquote className="-mt-2 font-display text-[1.05rem] font-semibold italic leading-[1.65] tracking-[-0.01em] text-white text-pretty">
-              {devotion.keyScriptureText || '…'}
-            </blockquote>
-            <p className="mt-4 font-sans text-[0.72rem] font-bold uppercase tracking-[0.1em] text-accent">
-              {devotion.keyScripture}
-              {devotion.keyScriptureTranslation && ` · ${devotion.keyScriptureTranslation}`}
-            </p>
-          </div>
-        </section>
-
-        {devotion.supportingScriptures.length > 0 && (
-          <section className="mt-6">
-            <p className="eyebrow">Also read</p>
-            <ul className="mt-2.5 flex flex-wrap gap-2">
-              {devotion.supportingScriptures.map((ref) => (
-                <li key={ref}>
-                  <Link
-                    to={`/bible?ref=${encodeURIComponent(ref)}`}
-                    className="inline-block rounded-full bg-raised px-3.5 py-1.5 font-sans text-[0.75rem] font-semibold text-brand-strong transition-colors hover:bg-brand-wash dark:text-brand"
-                  >
-                    {ref}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        {/* --- Read --------------------------------------------------------- */}
-        <Section
-          id="read"
-          title="The Thought"
-          glyph="✦"
-          tone="brand"
-          innerRef={(el) => {
-            sectionRefs.current.read = el
-          }}
-        >
-          <div className="space-y-[1.1rem]">
-            {paragraphs.map((para, i) => (
-              <p key={i} className="font-sans text-[0.97rem] leading-[1.8] text-muted text-pretty">
-                {para}
-              </p>
-            ))}
-          </div>
-
-          {devotion.teaches && (
-            <div className="mt-8 rounded-2xl border border-line bg-canvas p-6">
-              <p className="eyebrow text-brand-strong dark:text-brand">What Scripture teaches</p>
-              <div className="mt-2.5 space-y-3">
-                {splitProse(devotion.teaches).map((para, i) => (
-                  <p key={i} className="font-sans text-[0.92rem] leading-[1.78] text-muted text-pretty">
-                    {para}
-                  </p>
-                ))}
-              </div>
+              {devotion.themeLabel && (
+                <span className="rounded-full bg-white/15 px-3 py-1 font-sans text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-white">
+                  {devotion.themeLabel}
+                </span>
+              )}
+              <span className="font-sans text-xs text-white/75">{formatLongDate(date)}</span>
             </div>
-          )}
+            <h1
+              id={headingId}
+              className="animate-story-in motion-reduce:animate-none mt-4 font-display text-[2rem] font-extrabold leading-[1.08] tracking-[-0.04em] text-white text-balance"
+              style={{ animationDelay: '180ms' }}
+            >
+              {devotion.title}
+            </h1>
 
-          {/* Honesty over polish: when the agent could not research, it says so
-              rather than letting the devotional imply that it did. */}
-          {devotion.researchNote && (
-            <p className="mt-4 rounded-xl bg-raised px-4 py-3 font-sans text-xs text-muted">
-              {devotion.researchNote}
+            <figure className="animate-story-in motion-reduce:animate-none mt-8" style={{ animationDelay: '420ms' }}>
+              <span className="block font-display text-5xl leading-none text-amber-200/80" aria-hidden="true">
+                &ldquo;
+              </span>
+              <blockquote className="-mt-3 font-display text-[1.2rem] font-semibold italic leading-[1.6] tracking-[-0.01em] text-white text-pretty">
+                {devotion.keyScriptureText || '…'}
+              </blockquote>
+              <figcaption className="mt-4 font-sans text-[0.75rem] font-bold uppercase tracking-[0.12em] text-amber-200">
+                {devotion.keyScripture}
+                {devotion.keyScriptureTranslation && ` · ${devotion.keyScriptureTranslation}`}
+              </figcaption>
+            </figure>
+
+            {devotion.supportingScriptures.length > 0 && (
+              <div className="animate-story-in motion-reduce:animate-none mt-8" style={{ animationDelay: '560ms' }}>
+                <p className="font-sans text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-white/75">
+                  Also read
+                </p>
+                <ul className="mt-2.5 flex flex-wrap gap-2">
+                  {devotion.supportingScriptures.map((ref) => (
+                    <li key={ref}>
+                      <Link
+                        to={`/bible?ref=${encodeURIComponent(ref)}`}
+                        className={`inline-block rounded-full bg-white/15 px-3.5 py-1.5 font-sans text-[0.75rem] font-semibold text-white transition-colors hover:bg-white/25 ${FOCUS}`}
+                      >
+                        {ref}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {section.note && <ResearchNote text={devotion.researchNote} />}
+          </>
+        )
+
+      case 'thought':
+        return (
+          <div className={REVEAL}>
+            <p className={EYEBROW}>
+              {section.pages > 1 ? `Reflection · ${section.page} of ${section.pages}` : 'Reflection'}
             </p>
-          )}
-        </Section>
+            {/* Later pages keep a heading for screen readers, but repeating it
+                on screen would interrupt the reading. */}
+            <h2 id={headingId} className={section.page === 1 ? H2 : 'sr-only'}>
+              {section.page === 1 ? 'The Thought' : section.label}
+            </h2>
+            <div className="mt-5 space-y-[1.15rem]">
+              {section.paragraphs.map((para, i) => (
+                <p key={i} className={BODY}>
+                  {para}
+                </p>
+              ))}
+            </div>
+            {section.note && <ResearchNote text={devotion.researchNote} />}
+          </div>
+        )
 
-        {/* --- Reflect ------------------------------------------------------ */}
-        {total > 0 && (
-          <Section
-            id="reflect"
-            title="Selah — Pause & Reflect"
-            glyph="◎"
-            tone="emerald"
-            innerRef={(el) => {
-              sectionRefs.current.reflect = el
-            }}
-            aside={
-              <span className="font-sans text-[0.75rem] font-bold text-emerald-600 dark:text-emerald-400">
+      case 'teaches':
+        return (
+          <div className={REVEAL}>
+            <p className={EYEBROW}>Scripture</p>
+            <h2 id={headingId} className={H2}>
+              What Scripture teaches
+            </h2>
+            <div className="mt-5 space-y-3.5">
+              {section.paragraphs.map((para, i) => (
+                <p key={i} className={BODY}>
+                  {para}
+                </p>
+              ))}
+            </div>
+            {section.note && <ResearchNote text={devotion.researchNote} />}
+          </div>
+        )
+
+      case 'reflect':
+        return (
+          <div className={REVEAL}>
+            <div className="flex items-end justify-between gap-3">
+              <div>
+                <p className={EYEBROW}>Selah</p>
+                <h2 id={headingId} className={H2}>
+                  Pause &amp; Reflect
+                </h2>
+              </div>
+              <span className="pb-1 font-sans text-[0.8rem] font-bold text-emerald-300">
                 {answered}/{total}
               </span>
-            }
-          >
-            <div className="mb-5 h-1.5 overflow-hidden rounded-full bg-line">
+            </div>
+            <div
+              className="mt-4 h-1.5 overflow-hidden rounded-full bg-white/15"
+              role="progressbar"
+              aria-label="Questions reflected on"
+              aria-valuemin={0}
+              aria-valuemax={total}
+              aria-valuenow={answered}
+            >
               <div
-                className="h-full rounded-full bg-emerald-500 transition-[width] duration-500"
+                className="h-full rounded-full bg-emerald-400 transition-[width] duration-500"
                 style={{ width: `${pct}%` }}
               />
             </div>
 
-            <ul className="space-y-3">
+            <ul className="mt-5 space-y-3">
               {devotion.questions.map((question, i) => {
                 const isChecked = checked.has(i)
                 return (
@@ -378,17 +402,17 @@ export default function DailyDevotion() {
                     <button
                       onClick={() => toggleQuestion(i)}
                       aria-pressed={isChecked}
-                      className={`flex w-full items-start gap-3.5 rounded-2xl border p-4 text-left transition-colors ${
+                      className={`flex w-full items-start gap-3.5 rounded-2xl border p-4 text-left backdrop-blur-sm transition-colors ${FOCUS} ${
                         isChecked
-                          ? 'border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/40'
-                          : 'border-line bg-surface hover:bg-raised'
+                          ? 'border-emerald-300/50 bg-emerald-400/15'
+                          : 'border-white/15 bg-white/[0.07] hover:bg-white/[0.12]'
                       }`}
                     >
                       <span
                         className={`mt-0.5 flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-lg border transition-colors ${
                           isChecked
-                            ? 'border-transparent bg-emerald-500 text-white'
-                            : 'border-line bg-canvas text-transparent'
+                            ? 'border-transparent bg-emerald-400 text-panel'
+                            : 'border-white/30 bg-transparent text-transparent'
                         }`}
                         aria-hidden="true"
                       >
@@ -397,16 +421,12 @@ export default function DailyDevotion() {
                       <span>
                         <span
                           className={`block font-sans text-[0.68rem] font-bold uppercase tracking-[0.08em] ${
-                            isChecked ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted'
+                            isChecked ? 'text-emerald-300' : 'text-white/70'
                           }`}
                         >
                           Question {i + 1}
                         </span>
-                        <span
-                          className={`mt-1 block font-sans text-[0.92rem] leading-[1.6] text-pretty ${
-                            isChecked ? 'text-emerald-900 dark:text-emerald-200' : 'text-muted'
-                          }`}
-                        >
+                        <span className="mt-1 block font-sans text-[0.95rem] leading-[1.6] text-white/90 text-pretty">
                           {question}
                         </span>
                       </span>
@@ -415,111 +435,84 @@ export default function DailyDevotion() {
                 )
               })}
             </ul>
-          </Section>
-        )}
+          </div>
+        )
 
-        {/* --- Apply -------------------------------------------------------- */}
-        {devotion.application && (
-          <Section
-            id="apply"
-            title="Today's Application"
-            glyph="▦"
-            tone="amber"
-            innerRef={(el) => {
-              sectionRefs.current.apply = el
-            }}
-          >
-            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-900/60 dark:bg-amber-950/30">
+      case 'apply':
+        return (
+          <div className={REVEAL}>
+            <p className={EYEBROW}>Live it</p>
+            <h2 id={headingId} className={H2}>
+              Today's Application
+            </h2>
+            <div className="mt-5 rounded-2xl border border-amber-200/25 bg-amber-200/10 p-6 backdrop-blur-sm">
               <div className="space-y-3">
-                {splitProse(devotion.application).map((para, i) => (
-                  <p
-                    key={i}
-                    className="font-sans text-[0.95rem] leading-[1.78] text-amber-900 dark:text-amber-100 text-pretty"
-                  >
+                {section.paragraphs.map((para, i) => (
+                  <p key={i} className="font-sans text-[1rem] leading-[1.8] text-amber-50 text-pretty">
                     {para}
                   </p>
                 ))}
               </div>
             </div>
-          </Section>
-        )}
+          </div>
+        )
 
-        {/* --- Pray --------------------------------------------------------- */}
-        {devotion.prayer && (
-          <Section
-            id="pray"
-            title="Pray"
-            glyph="♡"
-            tone="violet"
-            innerRef={(el) => {
-              sectionRefs.current.pray = el
-            }}
-          >
-            <div className="relative overflow-hidden rounded-2xl bg-panel p-7">
-              <div
-                className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full"
-                style={{ background: 'radial-gradient(circle, oklch(0.606 0.25 303 / 0.25) 0%, transparent 70%)' }}
-                aria-hidden="true"
-              />
-              <div className="relative">
-                <div
-                  className={`relative overflow-hidden transition-[max-height] duration-500 ${
-                    prayerOpen ? 'max-h-[80rem]' : 'max-h-[7.5rem]'
-                  }`}
+      case 'pray':
+        return (
+          <div className={REVEAL}>
+            <p className={EYEBROW}>Pray</p>
+            <h2 id={headingId} className={H2}>
+              A prayer for today
+            </h2>
+            <div className="mt-6 space-y-4 border-l-2 border-amber-200/40 pl-5">
+              {section.paragraphs.map((para, i) => (
+                <p
+                  key={i}
+                  className="font-sans text-[1.02rem] font-light italic leading-[1.85] text-white/90 text-pretty"
                 >
-                  {prayerParagraphs.map((para, i) => (
-                    <p
-                      key={i}
-                      className="mb-4 font-sans text-[0.95rem] font-light italic leading-[1.8] text-white/80 text-pretty"
-                    >
+                  {para}
+                </p>
+              ))}
+            </div>
+          </div>
+        )
+
+      case 'selah':
+        return (
+          <div className={`${REVEAL} text-center`}>
+            {section.paragraphs.length > 0 ? (
+              <>
+                <div className="mb-7 flex justify-center gap-2.5" aria-hidden="true">
+                  {[0, 0.6, 1.2].map((delay) => (
+                    <span
+                      key={delay}
+                      className="h-2 w-2 animate-breathe rounded-full bg-amber-200"
+                      style={{ animationDelay: `${delay}s` }}
+                    />
+                  ))}
+                </div>
+                <p className={EYEBROW}>Today's Selah</p>
+                <h2
+                  id={headingId}
+                  className="mt-3 font-display text-[1.9rem] font-bold leading-tight tracking-[-0.03em] text-white"
+                >
+                  Be still.
+                  <br />
+                  <span className="text-amber-200">Two minutes.</span>
+                </h2>
+                <div className="mx-auto mt-6 max-w-md space-y-3">
+                  {section.paragraphs.map((para, i) => (
+                    <p key={i} className="font-sans text-[0.98rem] font-light leading-[1.8] text-white/85 text-pretty">
                       {para}
                     </p>
                   ))}
-                  {!prayerOpen && (
-                    <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-b from-transparent to-[oklch(var(--panel))]" />
-                  )}
                 </div>
-                <button
-                  onClick={() => setPrayerOpen((open) => !open)}
-                  className="mt-3 font-sans text-[0.8rem] font-bold text-accent transition-opacity hover:opacity-80"
-                >
-                  {prayerOpen ? 'Read less ↑' : 'Read full prayer ↓'}
-                </button>
-              </div>
-            </div>
-          </Section>
-        )}
-
-        {/* --- Selah -------------------------------------------------------- */}
-        {devotion.selah && (
-          <Section
-            id="selah"
-            title="Today's Selah"
-            glyph="·"
-            tone="brand"
-            innerRef={(el) => {
-              sectionRefs.current.selah = el
-            }}
-          >
-            <div className="overflow-hidden rounded-2xl bg-gradient-to-br from-[oklch(var(--panel))] to-[oklch(0.32_0.07_262)] p-8 text-center">
-              <div className="mb-7 flex justify-center gap-2.5" aria-hidden="true">
-                {[0, 0.6, 1.2].map((delay) => (
-                  <span key={delay} className="h-2 w-2 animate-breathe rounded-full bg-accent" style={{ animationDelay: `${delay}s` }} />
-                ))}
-              </div>
-              <p className="font-display text-2xl font-bold leading-tight tracking-[-0.03em] text-white">
-                Be still.
-                <br />
-                <span className="text-accent">Two minutes.</span>
-              </p>
-              <div className="mx-auto mt-6 max-w-md space-y-3">
-                {splitProse(devotion.selah).map((para, i) => (
-                  <p key={i} className="font-sans text-[0.92rem] font-light leading-[1.78] text-white/65 text-pretty">
-                    {para}
-                  </p>
-                ))}
-              </div>
-            </div>
+              </>
+            ) : (
+              <h2 id={headingId} className={H2}>
+                That's today's devotional
+              </h2>
+            )}
 
             <Link
               to="/devotion/new"
@@ -530,67 +523,175 @@ export default function DailyDevotion() {
                   translation: devotion.keyScriptureTranslation,
                 },
               }}
-              className="mt-4 flex items-center justify-between gap-3 rounded-2xl border border-line bg-surface p-5 transition-colors hover:bg-raised"
+              className={`mt-9 flex items-center justify-between gap-3 rounded-2xl border border-white/15 bg-white/[0.08] p-5 text-left backdrop-blur-sm transition-colors hover:bg-white/[0.14] ${FOCUS}`}
             >
               <span>
-                <span className="block font-display text-[0.92rem] font-bold tracking-[-0.02em] text-ink">
+                <span className="block font-display text-[0.95rem] font-bold tracking-[-0.02em] text-white">
                   Journal this verse
                 </span>
-                <span className="mt-0.5 block font-sans text-xs text-muted">
+                <span className="mt-0.5 block font-sans text-xs text-white/75">
                   Write what God is speaking to you today.
                 </span>
               </span>
-              <span className="shrink-0 rounded-lg bg-raised px-4 py-2 font-display text-[0.8rem] font-bold text-brand-strong dark:text-brand">
+              <span className="shrink-0 rounded-lg bg-white/15 px-4 py-2 font-display text-[0.8rem] font-bold text-white">
                 Open →
               </span>
             </Link>
-          </Section>
-        )}
 
-        {/* --- Complete ----------------------------------------------------- */}
-        <div className="mt-10 flex flex-col items-center gap-3">
-          <button
-            onClick={toggleCompleted}
-            className={`w-full rounded-2xl px-6 py-4 font-display text-base font-extrabold tracking-[-0.02em] transition-all ${
-              completed
-                ? 'border-2 border-emerald-300 bg-emerald-50 text-emerald-600 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-400'
-                : 'bg-gradient-to-br from-brand-strong to-accent text-on-brand shadow-glow'
-            }`}
+            <button
+              onClick={toggleCompleted}
+              aria-pressed={completed}
+              className={`mt-4 w-full rounded-2xl px-6 py-4 font-display text-base font-extrabold tracking-[-0.02em] transition-all ${FOCUS} ${
+                completed
+                  ? 'border-2 border-emerald-300/60 bg-emerald-400/15 text-emerald-200'
+                  : 'bg-gradient-to-br from-amber-100 to-amber-300 text-panel shadow-[0_8px_28px_-8px_rgb(252_211_77/0.55)]'
+              }`}
+            >
+              {completed ? '✓ Completed — see you tomorrow' : 'Mark as complete'}
+            </button>
+            <p className="mt-3 font-sans text-xs text-white/70">New topic, new devotion every morning.</p>
+          </div>
+        )
+
+      default:
+        return null
+    }
+  }
+
+  return createPortal(
+    <article
+      aria-labelledby="scripture-heading"
+      className="fixed inset-0 z-modal overflow-hidden bg-panel text-white"
+      onKeyDown={onKeyDown}
+    >
+      <StoryBackdrop background={background} fallbackSrc={heroImage} />
+      {/* Even across the photo, then deeper at the foot where longer text
+          ends. Keeps white body text above 4.5:1 over a bright image. */}
+      <div
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            'linear-gradient(to bottom, oklch(var(--panel) / 0.72) 0%, oklch(var(--panel) / 0.74) 50%, oklch(var(--panel) / 0.9) 100%)',
+        }}
+        aria-hidden="true"
+      />
+      <div className="pointer-events-none absolute inset-0" aria-hidden="true">
+        <GoldDust />
+      </div>
+
+      <div
+        ref={scrollerRef}
+        tabIndex={0}
+        role="region"
+        aria-label="Devotional. Use the arrow keys to move between sections."
+        className="absolute inset-0 snap-y snap-mandatory overflow-y-auto overscroll-contain focus:outline-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      >
+        {sections.map((section, index) => (
+          <section
+            key={section.id}
+            id={section.id}
+            ref={(el) => {
+              sectionEls.current[index] = el
+            }}
+            data-index={index}
+            data-revealed={!observing || revealed.has(index) ? 'true' : 'false'}
+            aria-labelledby={`${section.id}-heading`}
+            tabIndex={-1}
+            className="group/section relative flex min-h-full snap-start snap-always flex-col justify-center px-6 pb-[calc(6rem+env(safe-area-inset-bottom))] pt-[calc(6rem+env(safe-area-inset-top))] focus:outline-none"
           >
-            {completed ? '✓ Completed — see you tomorrow' : 'Mark as complete'}
-          </button>
-          <p className="font-sans text-xs text-muted">New topic, new devotion every morning.</p>
+            <div className="mx-auto w-full max-w-xl">{renderSection(section)}</div>
+
+            {index === 0 && (
+              <div className="absolute inset-x-0 bottom-0 flex flex-col items-center gap-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+                {sections.length > 1 && (
+                  <button
+                    onClick={() => goTo(1, { focus: true })}
+                    aria-label={`Next: ${sections[1].label}`}
+                    className={`flex h-10 w-10 animate-story-in motion-reduce:animate-none items-center justify-center rounded-full text-white/80 transition-colors hover:text-white ${FOCUS}`}
+                    style={{ animationDelay: '900ms' }}
+                  >
+                    <ChevronDownIcon width={20} height={20} />
+                  </button>
+                )}
+                {credit && (
+                  <p className="px-6 text-center font-sans text-[0.65rem] text-white/75">
+                    {creditHref ? (
+                      <a
+                        href={creditHref}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={`underline decoration-white/30 underline-offset-2 hover:text-white ${FOCUS}`}
+                      >
+                        {credit}
+                      </a>
+                    ) : (
+                      credit
+                    )}
+                  </p>
+                )}
+              </div>
+            )}
+          </section>
+        ))}
+      </div>
+
+      {/* Story chrome. The fade lets the controls read over any photo; the
+          wrapper ignores pointers so it never blocks a swipe on the text. */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 bg-gradient-to-b from-black/55 via-black/25 to-transparent pb-10 pt-[calc(env(safe-area-inset-top)+0.25rem)]">
+        <div className="pointer-events-auto mx-auto max-w-xl px-3">
+          <nav aria-label="Devotional sections">
+            <ol className="flex gap-1">
+              {sections.map((section, index) => (
+                <li key={section.id} className="flex-1">
+                  <button
+                    onClick={() => goTo(index, { focus: true })}
+                    aria-label={`${section.label} (${index + 1} of ${sections.length})`}
+                    aria-current={index === active ? 'step' : undefined}
+                    className={`block w-full rounded-sm py-2.5 ${FOCUS}`}
+                  >
+                    <span className="block h-[3px] overflow-hidden rounded-full bg-white/25">
+                      <span
+                        className={`block h-full origin-left rounded-full bg-amber-100 transition-transform duration-500 ease-out-expo ${
+                          index <= active ? 'scale-x-100' : 'scale-x-0'
+                        }`}
+                      />
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ol>
+          </nav>
+
+          <div className="flex items-center justify-between gap-3 px-1">
+            <button
+              onClick={onBack}
+              aria-label="Go back"
+              className={`flex h-10 w-10 items-center justify-center rounded-full bg-white/15 text-white backdrop-blur transition-colors hover:bg-white/25 ${FOCUS}`}
+            >
+              <ChevronLeftIcon width={18} height={18} />
+            </button>
+            <p className="min-w-0 truncate font-sans text-xs font-semibold text-white/85" aria-hidden="true">
+              {sections[active]?.label}
+            </p>
+            <button
+              onClick={onShare}
+              aria-label="Share this devotional"
+              className={`flex h-10 w-10 items-center justify-center rounded-full bg-white/15 text-white backdrop-blur transition-colors hover:bg-white/25 ${FOCUS}`}
+            >
+              <ShareIcon width={16} height={16} />
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </article>,
+    document.body
   )
 }
 
-const TONES = {
-  brand: 'bg-raised text-brand-strong dark:text-brand',
-  emerald: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/50 dark:text-emerald-400',
-  amber: 'bg-amber-50 text-amber-600 dark:bg-amber-950/50 dark:text-amber-400',
-  violet: 'bg-violet-50 text-violet-600 dark:bg-violet-950/50 dark:text-violet-400',
-}
-
-function Section({ id, title, glyph, tone, innerRef, aside, children }) {
-  return (
-    <section ref={innerRef} id={id} className="mt-10" style={{ scrollMarginTop: SCROLL_MARGIN }}>
-      <div className="mb-5 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5">
-          <span
-            className={`flex h-8 w-8 items-center justify-center rounded-[9px] font-display text-xs font-extrabold ${TONES[tone]}`}
-            aria-hidden="true"
-          >
-            {glyph}
-          </span>
-          <h2 className="font-display text-[1.1rem] font-extrabold tracking-[-0.03em] text-ink">{title}</h2>
-        </div>
-        {aside}
-      </div>
-      {children}
-    </section>
-  )
+/** Honesty over polish: when the agent could not research, it says so rather
+ *  than letting the devotional imply that it did. */
+function ResearchNote({ text }) {
+  return <p className="mt-6 rounded-xl bg-black/30 px-4 py-3 font-sans text-xs text-white/80">{text}</p>
 }
 
 function ReaderSkeleton() {
@@ -629,19 +730,6 @@ function NotReadyYet({ date, isToday }) {
       </Link>
     </div>
   )
-}
-
-/**
- * The agent writes multi-paragraph prose — "the thought" alone runs 500-800
- * words. Rendering that into a single <p> collapses every blank line into an
- * unreadable wall, so split on blank lines and keep the shape the agent wrote.
- */
-function splitProse(text) {
-  if (!text) return []
-  return String(text)
-    .split(/\n\s*\n/)
-    .map((part) => part.trim())
-    .filter(Boolean)
 }
 
 function formatLongDate(iso) {

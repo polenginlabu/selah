@@ -31,8 +31,8 @@ export default {
           /* `none`, not translateY(0): fill-mode: both keeps the final frame
              applied forever, and ANY transform — even translateY(0) — turns
              the element into a containing block for position:fixed
-             descendants (e.g. DailyDevotion's progress bar) so they scroll
-             with the page instead of staying on the viewport. */
+             descendants so they scroll with the page instead of staying on
+             the viewport. */
           to: { opacity: '1', transform: 'none' },
         },
         fadeIn: {
@@ -53,6 +53,13 @@ export default {
           '0%, 100%': { opacity: '0.3', transform: 'scale(1)' },
           '50%': { opacity: '1', transform: 'scale(1.4)' },
         },
+        // The devotional reader's opening: the title and key verse come into
+        // focus out of the dust, rather than merely sliding in. Ends on
+        // `transform: none` / `filter: none` for the same reason `rise` does.
+        storyIn: {
+          from: { opacity: '0', transform: 'translateY(12px)', filter: 'blur(6px)' },
+          to: { opacity: '1', transform: 'none', filter: 'none' },
+        },
       },
       animation: {
         rise: 'rise 0.5s cubic-bezier(0.16, 1, 0.3, 1) both',
@@ -60,6 +67,7 @@ export default {
         'sheet-up': 'sheetUp 320ms cubic-bezier(0.32, 0.72, 0, 1) both',
         'toast-out': 'fadeOut 180ms ease-in both',
         breathe: 'breathe 3s ease-in-out infinite',
+        'story-in': 'storyIn 0.9s cubic-bezier(0.16, 1, 0.3, 1) both',
       },
       colors: {
         canvas: 'oklch(var(--canvas) / <alpha-value>)',

@@ -13,6 +13,10 @@ import { getLevelProgress, getTribeForLevel } from '../lib/gamification'
 import { CheckIcon, ChevronDownIcon, PlusIcon, SearchIcon, SunIcon, XIcon, BookIcon, SproutIcon, BellIcon } from '../icons'
 import { TRIBE_ICONS } from '../tribeIcons'
 import { PrayerHomeEntry } from '../components/PrayerHomeEntry'
+import { GoldDust } from '../components/GoldDust'
+import { StoryBackdrop } from '../components/StoryBackdrop'
+import { photoCredit } from '../lib/photoCredit'
+import { useDailyBackground } from '../lib/useDailyBackground'
 
 const PAGE_SIZE = 20
 const LOAD_MORE_INCREMENT = 100
@@ -277,6 +281,8 @@ export function Home() {
 }
 
 function DailyDevotionCard({ devotion, doneToday }) {
+  const background = useDailyBackground(devotion ? todayISO() : null)
+
   // undefined = still fetching. Fast, because the row is only read — nothing
   // is generated in the browser.
   if (devotion === undefined) {
@@ -309,43 +315,72 @@ function DailyDevotionCard({ devotion, doneToday }) {
   // rendering all of it here buried the rest of the page under one card — the
   // full reading lives at /daily.
   const preview = firstParagraph(devotion.thought)
+  const credit = photoCredit(background?.attribution)
 
+  // A window onto the reader at /daily: the same photo, the same gold dust.
+  // The card is dark in both themes, like the reader it opens. The credit is
+  // plain text here because the whole card is a link and links cannot nest;
+  // the reader carries the linked version.
   return (
     <Link
       to="/daily"
       aria-label={`Read today's devotional: ${devotion.title}`}
-      className="animate-rise block overflow-hidden rounded-2xl border border-brand/25 bg-brand-wash shadow-soft transition-shadow hover:shadow-lift"
+      className="group animate-rise relative isolate block overflow-hidden rounded-2xl bg-panel text-white shadow-soft transition-shadow duration-300 hover:shadow-lift focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
     >
-      <div className="p-5">
+      <StoryBackdrop
+        background={background}
+        className="transition-transform duration-700 ease-out-expo group-hover:scale-[1.03]"
+      />
+      {/* Strong enough at the top for the eyebrow over a bright sky, and near
+          opaque at the foot where the preview text sits. */}
+      <div
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            'linear-gradient(to bottom, oklch(var(--panel) / 0.68) 0%, oklch(var(--panel) / 0.74) 40%, oklch(var(--panel) / 0.94) 100%)',
+        }}
+        aria-hidden="true"
+      />
+      <div className="pointer-events-none absolute inset-0" aria-hidden="true">
+        <GoldDust />
+      </div>
+
+      <div className="relative p-5 pt-6">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="eyebrow text-brand-strong dark:text-brand">Selah — daily devotional</p>
-          <span className="chip-brand">{devotion.topic.label}</span>
+          <p className="text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-amber-100">
+            Selah — daily devotional
+          </p>
+          <span className="inline-flex items-center rounded-full bg-white/15 px-2.5 py-0.5 text-xs font-semibold text-white">
+            {devotion.topic.label}
+          </span>
         </div>
 
-        <h2 className="mt-2 font-display text-xl font-extrabold leading-snug tracking-tight text-balance">
+        <h2 className="mt-10 font-display text-[1.45rem] font-extrabold leading-[1.15] tracking-[-0.03em] text-white text-balance">
           {devotion.title}
         </h2>
 
-        <p className="mt-2 text-sm font-semibold text-accent-ink">
+        <p className="mt-2 text-sm font-semibold text-amber-200">
           {devotion.keyScripture}
           {devotion.keyScriptureTranslation && (
-            <span className="ml-1.5 font-normal text-muted">({devotion.keyScriptureTranslation})</span>
+            <span className="ml-1.5 font-normal text-white/70">({devotion.keyScriptureTranslation})</span>
           )}
         </p>
 
         {preview && (
-          <p className="mt-3 line-clamp-3 font-sans text-[0.95rem] leading-relaxed text-muted text-pretty">
+          <p className="mt-3 line-clamp-3 font-sans text-[0.95rem] leading-relaxed text-white/85 text-pretty">
             {preview}
           </p>
         )}
       </div>
 
-      <div className="flex items-center justify-between gap-3 border-t border-brand/15 px-5 py-3.5">
-        <span className="text-xs font-medium text-muted">
+      <div className="relative flex items-center justify-between gap-3 border-t border-white/10 px-5 py-3.5">
+        <span className="text-xs font-medium text-white/75">
           {readingMinutes(devotion)} min read · {devotion.questions.length} questions
         </span>
         <span className="btn-primary pointer-events-none px-3.5 py-1.5 text-sm">Read today's devotion</span>
       </div>
+
+      {credit && <p className="relative px-5 pb-3 -mt-1.5 text-[0.65rem] text-white/60">{credit}</p>}
 
       {doneToday && <span className="sr-only">You've already journaled today.</span>}
     </Link>
