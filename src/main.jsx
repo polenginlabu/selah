@@ -33,7 +33,18 @@ createRoot(document.getElementById('root')).render(
   </StrictMode>
 )
 
-document.getElementById('boot-splash')?.remove()
+// Two frames, so React's first commit (usually the matching SplashScreen) has
+// painted underneath before the boot splash fades off it — otherwise the swap
+// can flash a blank canvas. The timeout outlasts the 200ms opacity transition.
+const bootSplash = document.getElementById('boot-splash')
+if (bootSplash) {
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      bootSplash.classList.add('is-done')
+      setTimeout(() => bootSplash.remove(), 250)
+    })
+  )
+}
 
 // Offline support. Registered after paint so it never delays first render.
 startOutbox()

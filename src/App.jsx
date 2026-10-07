@@ -1,9 +1,11 @@
-import { Suspense, lazy } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { DotLottieReact } from '@lottiefiles/dotlottie-react'
 import { useAuth } from './context/AuthContext'
 import { Layout } from './components/Layout'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { Logo } from './components/Logo'
 import { Home } from './pages/Home'
 import { SignIn } from './pages/SignIn'
 import splashAnimation from './assets/sailing-boat.lottie'
@@ -32,24 +34,99 @@ function RouteLoadingSpinner() {
   return <SplashScreen />
 }
 
-function SplashScreen() {
-  return (
-    <div className="flex min-h-dvh flex-col items-center justify-center px-6">
-      <div className="h-40 w-40 overflow-hidden">
-        <div style={{ transform: 'translate(-60px, -88px) scale(1.75)', transformOrigin: '0 0' }}>
-          <DotLottieReact
-            src={splashAnimation}
-            autoplay
-            loop
-            backgroundColor="transparent"
-            className="h-40 w-40"
-            width={256}
-            height={256}
-          />
+const REDUCED_MOTION = '(prefers-reduced-motion: reduce)'
+
+// The global reduced-motion rule in index.css only reaches CSS animations; the
+// Lottie player is driven from JS, so the splash has to ask for itself.
+function usePrefersReducedMotion() {
+  const [reduced, setReduced] = useState(() => window.matchMedia?.(REDUCED_MOTION).matches ?? false)
+  useEffect(() => {
+    const query = window.matchMedia?.(REDUCED_MOTION)
+    if (!query?.addEventListener) return
+    const onChange = () => setReduced(query.matches)
+    query.addEventListener('change', onChange)
+    return () => query.removeEventListener('change', onChange)
+  }, [])
+  return reduced
+}
+
+/**
+ * Full-screen splash, mirroring #boot-splash in index.html: same opaque
+ * canvas, same safe-area padding, same 40px lockup at the exact centre. The
+ * boot splash fades away on top of this one, so the only thing that changes at
+ * the handoff is the boat rising in above the lockup.
+ *
+ * Portalled to <body> because the route fallback renders inside Layout's
+ * <main>, whose `rise` animation applies a transform — and a transformed
+ * ancestor would trap a position:fixed child inside it.
+ */
+function SplashScreen({ exiting = false, onExited }) {
+  const reducedMotion = usePrefersReducedMotion()
+
+  // Backstop for onAnimationEnd: if the exit animation never runs, the overlay
+  // must still go, or it would sit over the app for good.
+  useEffect(() => {
+    if (!exiting) return
+    const timer = setTimeout(onExited, 400)
+    return () => clearTimeout(timer)
+  }, [exiting, onExited])
+
+  return createPortal(
+    <div
+      role={exiting ? undefined : 'status'}
+      aria-live={exiting ? undefined : 'polite'}
+      aria-label={exiting ? undefined : 'Loading'}
+      aria-hidden={exiting || undefined}
+      onAnimationEnd={(e) => {
+        if (exiting && e.target === e.currentTarget) onExited()
+      }}
+      className={`fixed inset-0 z-[100] grid touch-none place-items-center overscroll-none bg-canvas pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] pt-[env(safe-area-inset-top)] ${
+        exiting ? 'pointer-events-none animate-[fadeIn_240ms_ease-in_reverse_both]' : ''
+      }`}
+    >
+      <span className="sr-only">Loading…</span>
+      <div className="relative" aria-hidden="true">
+        {/* Hangs above the lockup rather than stacking with it, so the lockup
+            keeps the boot splash's position to the pixel. */}
+        <div className="absolute bottom-full left-1/2 mb-5 -translate-x-1/2">
+          {/* 88px window onto the 256px animation; the translate is the crop,
+              in the same proportion to the window as before. */}
+          <div className="h-[88px] w-[88px] animate-rise overflow-hidden">
+            <div style={{ transform: 'translate(-33px, -48.4px) scale(1.75)', transformOrigin: '0 0' }}>
+              <DotLottieReact
+                key={reducedMotion ? 'still' : 'sailing'}
+                src={splashAnimation}
+                autoplay={!reducedMotion}
+                loop={!reducedMotion}
+                backgroundColor="transparent"
+                className="h-[88px] w-[88px]"
+                width={256}
+                height={256}
+              />
+            </div>
+          </div>
         </div>
+        <Logo size={40} />
       </div>
-    </div>
+    </div>,
+    document.body
   )
+}
+
+/**
+ * Keeps the splash on screen for its fade-out after auth settles. Purely
+ * presentational: the app renders underneath the moment `loading` flips, and
+ * the fading overlay ignores pointer events.
+ */
+function useSplashExit(loading) {
+  const [wasLoading, setWasLoading] = useState(loading)
+  const [exiting, setExiting] = useState(false)
+  if (wasLoading !== loading) {
+    setWasLoading(loading)
+    setExiting(!loading)
+  }
+  const finish = useCallback(() => setExiting(false), [])
+  return [exiting, finish]
 }
 
 function withSuspense(element) {
@@ -62,10 +139,19 @@ function withSuspense(element) {
  */
 function AuthedApp() {
   const { user, loading } = useAuth()
+  const [splashExiting, finishSplashExit] = useSplashExit(loading)
 
-  if (loading) return <SplashScreen />
-  if (!user) return <SignIn />
+  // One splash at one tree position for both phases, so the fade-out carries
+  // on the same instance — the boat keeps sailing instead of remounting.
+  return (
+    <>
+      {!loading && (user ? <AuthedRoutes /> : <SignIn />)}
+      {(loading || splashExiting) && <SplashScreen exiting={!loading} onExited={finishSplashExit} />}
+    </>
+  )
+}
 
+function AuthedRoutes() {
   return (
     <Routes>
       <Route element={<Layout />}>
