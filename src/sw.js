@@ -167,9 +167,14 @@ firebase.initializeApp({
   appId: '1:205410997272:web:aaf7006381448a71821f6d',
 })
 
+// Meditation and conquest reminders arrive as notification messages; the
+// devotion reminder is data-only ({ title, body, url, kind }) so the browser
+// never auto-displays a copy alongside this one.
 firebase.messaging().onBackgroundMessage((payload) => {
-  const { title, body } = payload.notification ?? {}
+  const title = payload.notification?.title ?? payload.data?.title
+  const body = payload.notification?.body ?? payload.data?.body
   if (!title) return
+  const data = { url: payload.data?.url, kind: payload.data?.kind }
 
   // Foreground banners are the page's job (Layout.jsx onMessage). The compat
   // SDK suppresses the SW path when a window is focused on most platforms,
@@ -179,20 +184,45 @@ firebase.messaging().onBackgroundMessage((payload) => {
   return self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
     const visible = clients.some((c) => c.visibilityState === 'visible' && 'focus' in c)
     if (visible) return
-    self.registration.showNotification(title, {
+    // Returned so the push event stays alive until the notification exists
+    // (data-only devotion pushes have no other display path).
+    return self.registration.showNotification(title, {
       body,
       icon: '/icon-192.png',
       badge: '/favicon-32.png',
+      data,
     })
   })
 })
 
+// Opens the notification's own link (same origin only), or the app root. A
+// devotion reminder without a url still lands on today's devotion.
+function notificationTarget(data) {
+  const fallback = data?.kind === 'devotion-reminder' ? '/daily' : '/'
+  try {
+    const url = new URL(data?.url ?? fallback, self.location.origin)
+    return url.origin === self.location.origin ? url : new URL(fallback, self.location.origin)
+  } catch {
+    return new URL(fallback, self.location.origin)
+  }
+}
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
+  const data = event.notification.data
+  const target = notificationTarget(data)
+  const hasLink = Boolean(data?.url || data?.kind)
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
       const existing = clients.find((c) => 'focus' in c)
-      return existing ? existing.focus() : self.clients.openWindow('/')
+      if (!existing) return self.clients.openWindow(hasLink ? target.href : '/')
+      // Notifications without a link keep the old behaviour: just focus.
+      if (!hasLink || !('navigate' in existing)) return existing.focus()
+      // navigate() rejects for a window this worker does not control yet.
+      return existing
+        .focus()
+        .then((client) => (client ?? existing).navigate(target.href))
+        .catch(() => self.clients.openWindow(target.href))
     })
   )
 })

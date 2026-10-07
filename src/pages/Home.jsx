@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 import { subscribeToUserStats } from '../data/userStats'
@@ -7,7 +7,9 @@ import { DEVOTION_METHOD_LABELS, getDevotionMeta, getDevotionsByDate, subscribeT
 import { getTodayDevotion } from '../data/dailyDevotion'
 import { getVerseOfTheDay } from '../data/votd'
 import { getMeditationSettings, setMeditationFocusWord, setMeditationPreferences } from '../data/meditation'
-import { enableNotifications } from '../lib/firebase'
+import { DEFAULT_REMINDER_TIME, getReminderSettings, hasCompletion, saveReminderSettings } from '../data/devotionReminders'
+import { canReceivePush, enableNotifications, refreshReminderTimezone } from '../lib/firebase'
+import { reminderMissed } from '../../supabase/functions/devotion-reminder/schedule.js'
 import { currentStreak, formatDateLong, formatDateShort, formatMonthYear, lastNDays, todayISO, weekdayLetter } from '../lib/date'
 import { getLevelProgress, getTribeForLevel } from '../lib/gamification'
 import { CheckIcon, ChevronDownIcon, PlusIcon, SearchIcon, SunIcon, XIcon, BookIcon, SproutIcon, BellIcon } from '../icons'
@@ -180,6 +182,8 @@ export function Home() {
       {user && <DailyDevotionCard devotion={dailyDevotion} doneToday={doneToday} />}
 
       {SHOW_VERSE_OF_THE_DAY && verse && <VerseOfTheDayCard verse={verse} doneToday={doneToday} />}
+
+      {user && <DevotionReminderCard uid={user.id} journaledToday={doneToday} />}
 
       {user && <MeditateCard uid={user.id} />}
 
@@ -439,6 +443,247 @@ function VerseOfTheDayCard({ verse, doneToday }) {
       </div>
     </section>
   )
+}
+
+const REMINDER_BANNER_KEY = 'selah:devotion-reminder:banner-dismissed'
+
+function readLocal(key) {
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+/** The reader's own "Mark as complete" for a date (see DailyDevotion.jsx). */
+function markedCompleteLocally(dateISO) {
+  try {
+    return Boolean(JSON.parse(readLocal(`selah:devotion:${dateISO}`) ?? 'null')?.completed)
+  } catch {
+    return false
+  }
+}
+
+const FOLLOWUP_OPTIONS = [
+  { value: 0, label: 'Off' },
+  { value: 1, label: '1' },
+  { value: 2, label: '2' },
+]
+
+/**
+ * Daily devotion reminder: a push at the chosen time, plus up to two "not too
+ * late" follow-ups (+2h, +5h, never 9pm–7am) until today's devotion is done.
+ * Sending happens server-side (supabase/functions/devotion-reminder); this card
+ * only stores preferences. Permission is requested only when turning it on.
+ */
+function DevotionReminderCard({ uid, journaledToday }) {
+  const toast = useToast()
+  const location = useLocation()
+  const sectionRef = useRef(null)
+  const today = todayISO()
+  const [settings, setSettings] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [installHint, setInstallHint] = useState(false)
+  const [completedToday, setCompletedToday] = useState(() => markedCompleteLocally(today))
+  const [bannerDismissed, setBannerDismissed] = useState(() => readLocal(REMINDER_BANNER_KEY) === today)
+
+  useEffect(() => {
+    getReminderSettings(uid)
+      .then(setSettings)
+      .catch((err) => console.error('Failed to load devotion reminder settings:', err))
+  }, [uid])
+
+  useEffect(() => {
+    hasCompletion(uid, today)
+      .then((done) => done && setCompletedToday(true))
+      .catch(() => {}) // the local flag still covers this device
+  }, [uid, today])
+
+  const enabled = settings?.enabled ?? false
+  useEffect(() => {
+    if (enabled) refreshReminderTimezone(uid).catch((err) => console.warn('timezone refresh failed', err))
+  }, [enabled, uid])
+
+  // Deep link from the account menu (/#devotion-reminder).
+  const loaded = settings !== null
+  useEffect(() => {
+    if (loaded && location.hash === '#devotion-reminder') {
+      sectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  }, [loaded, location.hash])
+
+  const save = async (next) => {
+    const prev = settings
+    setSettings(next)
+    try {
+      await saveReminderSettings(uid, next)
+      return true
+    } catch (err) {
+      console.error('Failed to save devotion reminder settings:', err)
+      setSettings(prev)
+      toast.error('Something went wrong — please try again.')
+      return false
+    }
+  }
+
+  const toggleEnabled = async () => {
+    const next = !settings.enabled
+    setBusy(true)
+    setInstallHint(false)
+    try {
+      if (next) {
+        const permission = await enableNotifications(uid)
+        if (permission === 'ios-install-required') {
+          setInstallHint(true)
+          return
+        }
+        if (permission !== 'granted') {
+          toast.error(
+            permission === 'denied'
+              ? 'Notifications are blocked — enable them for this site in your browser settings.'
+              : "Notifications aren't supported on this device."
+          )
+          return
+        }
+      }
+      if ((await save({ ...settings, enabled: next })) && next) {
+        toast.success(`Set — we'll remind you at ${formatTime(settings.time)}.`)
+      }
+    } catch (err) {
+      console.error('Failed to update devotion reminder:', err)
+      toast.error('Something went wrong — please try again.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // While off, edits stay local and are saved when the reminder is turned on.
+  const update = (changes) => {
+    const next = { ...settings, ...changes }
+    if (settings.enabled) save(next)
+    else setSettings(next)
+  }
+
+  if (!settings) return null
+
+  const doneToday = journaledToday || completedToday
+  const now = new Date()
+  const showBanner =
+    settings.enabled &&
+    !doneToday &&
+    !bannerDismissed &&
+    !canReceivePush() &&
+    reminderMissed(now.getHours() * 60 + now.getMinutes(), settings.time)
+
+  const dismissBanner = () => {
+    setBannerDismissed(true)
+    try {
+      localStorage.setItem(REMINDER_BANNER_KEY, today)
+    } catch {
+      /* it just shows again next open */
+    }
+  }
+
+  return (
+    <section
+      id="devotion-reminder"
+      ref={sectionRef}
+      aria-label="Devotion reminder"
+      className="animate-rise scroll-mt-24 rounded-2xl border border-line bg-surface p-5 shadow-soft"
+    >
+      {showBanner && (
+        <div className="mb-4 flex items-start gap-3 rounded-xl bg-brand-wash px-3.5 py-3 text-sm text-ink">
+          <p className="flex-1">
+            It is not too late to spend time with God today.{' '}
+            <Link to="/daily" className="font-semibold text-brand-strong underline-offset-2 hover:underline dark:text-brand">
+              Read today's devotion
+            </Link>
+          </p>
+          <button onClick={dismissBanner} aria-label="Dismiss" className="rounded-lg p-1 text-muted hover:bg-raised hover:text-ink">
+            <XIcon width={14} height={14} />
+          </button>
+        </div>
+      )}
+      <div className="flex items-center justify-between gap-3">
+        <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.08em] text-brand-strong dark:text-brand">
+          <BellIcon width={14} height={14} /> Devotion reminder
+        </p>
+        <button
+          role="switch"
+          aria-checked={settings.enabled}
+          aria-label="Devotion reminder"
+          onClick={toggleEnabled}
+          disabled={busy}
+          className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-50 ${
+            settings.enabled ? 'bg-brand' : 'bg-raised'
+          }`}
+        >
+          <span
+            className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+              settings.enabled ? 'translate-x-[1.375rem]' : 'translate-x-0.5'
+            }`}
+          />
+        </button>
+      </div>
+      <p className="mt-2 text-sm text-muted">
+        {busy
+          ? 'Updating…'
+          : settings.enabled
+            ? doneToday
+              ? "You've met with Him today — no more reminders until tomorrow."
+              : `Reminding you at ${formatTime(settings.time)}${
+                  settings.followups > 0 ? `, then ${settings.followups === 1 ? 'once' : 'twice'} more if you haven't yet` : ''
+                }.`
+            : 'Get a gentle nudge for your daily time with God.'}
+      </p>
+      <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-3">
+        <label className="flex items-center gap-2 text-sm text-ink">
+          Time
+          <input
+            type="time"
+            value={settings.time}
+            onChange={(e) => e.target.value && update({ time: e.target.value })}
+            className="input w-auto py-1.5"
+          />
+        </label>
+        <div className="flex items-center gap-2 text-sm text-ink">
+          <span id="devotion-followups-label">Follow-ups</span>
+          <div
+            role="radiogroup"
+            aria-labelledby="devotion-followups-label"
+            className="flex overflow-hidden rounded-lg border border-line text-xs font-semibold"
+          >
+            {FOLLOWUP_OPTIONS.map(({ value, label }) => (
+              <button
+                key={value}
+                role="radio"
+                aria-checked={settings.followups === value}
+                onClick={() => settings.followups !== value && update({ followups: value })}
+                className={`px-2.5 py-1.5 transition-colors ${
+                  settings.followups === value ? 'bg-brand text-on-brand' : 'text-muted hover:text-ink'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+      <p className="mt-2 text-xs text-muted">Follow-ups come 2 and 5 hours later, never between 9pm and 7am.</p>
+      {installHint && (
+        <p className="mt-2 text-xs text-muted">
+          Reminders on iPhone/iPad come from the installed app — share the site, then tap “Add to Home Screen”,
+          and turn the reminder on from there.
+        </p>
+      )}
+    </section>
+  )
+}
+
+/** "06:30" → the reader's own clock format, e.g. "6:30 AM". */
+function formatTime(hhmm) {
+  const [h, m] = hhmm.split(':').map(Number)
+  return new Date(2000, 0, 1, h, m).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 }
 
 function MeditateCard({ uid }) {

@@ -109,9 +109,30 @@ export async function onForegroundMessage(callback) {
   const messaging = await messagingPromise
   if (!messaging) return () => {}
   return onMessage(messaging, (payload) => {
-    const { title, body } = payload.notification ?? {}
-    if (title) callback(title, body)
+    // Devotion reminders are data-only, so fall back to payload.data.
+    const title = payload.notification?.title ?? payload.data?.title
+    const body = payload.notification?.body ?? payload.data?.body
+    if (title) callback(title, body, payload.data?.url)
   })
+}
+
+// Keeps notification_profiles.timezone current for the reminder scheduler
+// (people travel, and the zone was only captured when push was enabled).
+export async function refreshReminderTimezone(userId) {
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  if (!timezone) return
+  const { error } = await supabase
+    .from('notification_profiles')
+    .upsert({ user_id: userId, timezone }, { onConflict: 'user_id' })
+  if (error) throw error
+}
+
+// Whether this browser context can receive a push right now — used by the
+// in-app fallback banner. Mirrors the checks in enableNotifications().
+export function canReceivePush() {
+  if (typeof Notification === 'undefined' || !('serviceWorker' in navigator)) return false
+  if (isIos() && !isStandalone()) return false
+  return Notification.permission === 'granted'
 }
 
 export async function sendTestConquestReminder() {

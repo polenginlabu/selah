@@ -40,6 +40,12 @@ enabled = false
 verify_jwt = true
 timeout = 150
 
+# devotion-reminder is called by pg_cron, not a signed-in user, so the gateway
+# JWT check is off; the function itself requires the DEVOTION_REMINDER_SECRET
+# shared-secret header (see devotion-reminder/index.ts).
+[functions.devotion-reminder]
+verify_jwt = false
+
 [db]
 # Port to use for the local database URL.
 port = 54322

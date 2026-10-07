@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useAuth } from '../context/AuthContext'
 import { getDevotionForDate, getTodayDevotion } from '../data/dailyDevotion'
+import { deleteCompletion, upsertCompletion } from '../data/devotionReminders'
 import { todayISO } from '../lib/date'
 import { buildStorySections, nextSectionIndex } from '../lib/devotionStory'
 import { photoCredit, photoCreditHref } from '../lib/photoCredit'
@@ -30,13 +32,13 @@ const BODY = 'font-sans text-[1.02rem] leading-[1.85] text-white/90 text-pretty'
  * Per-device reading state: which questions the reader has ticked, and whether
  * they marked the day done.
  *
- * Deliberately localStorage rather than a table. The devotion row is shared by
- * every user (one per date), so progress written there would be everyone's
- * progress. A per-user table is the real answer if this should follow someone
- * across devices — this keeps the affordance honest in the meantime rather than
- * pretending to save something it cannot.
+ * localStorage is the source of truth for this page and its fast path. For
+ * today's devotion only, a signed-in reader's "Mark as complete" is also
+ * mirrored to devotion_completions (best effort) so the devotion reminder
+ * stops nagging once the day is done; opening the page re-syncs a completion
+ * that never reached the server. A failed sync never blocks the UI.
  */
-function useReadingState(date) {
+function useReadingState(date, { uid, isToday }) {
   const key = `selah:devotion:${date}`
 
   const [state, setState] = useState(() => {
@@ -68,9 +70,23 @@ function useReadingState(date) {
     })
   }, [])
 
+  const syncCompletion = isToday && Boolean(uid)
+
+  // Once per open: push a local-only completion up so the scheduler sees it.
+  const initiallyCompleted = useRef(state.completed)
+  useEffect(() => {
+    if (syncCompletion && initiallyCompleted.current) {
+      upsertCompletion(uid, date).catch((err) => console.warn('devotion completion sync failed', err))
+    }
+  }, [syncCompletion, uid, date])
+
   const toggleCompleted = useCallback(() => {
-    setState((prev) => ({ ...prev, completed: !prev.completed }))
-  }, [])
+    const next = !state.completed
+    setState((prev) => ({ ...prev, completed: next }))
+    if (!syncCompletion) return
+    const sync = next ? upsertCompletion(uid, date) : deleteCompletion(uid, date)
+    sync.catch((err) => console.warn('devotion completion sync failed', err))
+  }, [state.completed, syncCompletion, uid, date])
 
   return { ...state, toggleQuestion, toggleCompleted }
 }
@@ -79,9 +95,10 @@ export default function DailyDevotion() {
   const navigate = useNavigate()
   const { date: dateParam } = useParams()
   const date = dateParam ?? todayISO()
+  const { user } = useAuth()
 
   const [devotion, setDevotion] = useState(undefined)
-  const reading = useReadingState(date)
+  const reading = useReadingState(date, { uid: user?.id, isToday: !dateParam || dateParam === todayISO() })
   const background = useDailyBackground(date)
 
   useEffect(() => {

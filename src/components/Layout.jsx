@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
 import { disableNotifications, enableNotifications, onForegroundMessage, sendTestConquestReminder } from '../lib/firebase'
@@ -42,11 +42,23 @@ export function Layout() {
   const { canInstall, canPrompt, isIos, promptInstall } = usePwaInstall()
   const [showIosInstall, setShowIosInstall] = useState(false)
   const { open: assistantOpen, setOpen: setAssistantOpen, passage: assistantPassage } = useAssistant()
+  const navigate = useNavigate()
+  const navigateRef = useRef(navigate)
+  navigateRef.current = navigate
 
   useEffect(() => {
     let unsubscribe
-    onForegroundMessage((title, body) => {
-      if (Notification.permission === 'granted') new Notification(title, { body })
+    onForegroundMessage((title, body, url) => {
+      if (Notification.permission !== 'granted') return
+      const notification = new Notification(title, { body })
+      // Same-origin links only (the devotion reminder opens /daily).
+      if (url?.startsWith('/') && !url.startsWith('//')) {
+        notification.onclick = () => {
+          window.focus()
+          navigateRef.current(url)
+          notification.close()
+        }
+      }
     }).then((fn) => {
       unsubscribe = fn
     })
@@ -280,6 +292,18 @@ function AccountMenu({ user, onSignOut }) {
             </div>
           )}
           {user && <NotificationSettings uid={user.id} email={user.email ?? null} />}
+          {/* Outside NotificationSettings, which renders nothing where push is
+              unsupported — the card on Home explains that case itself. */}
+          {user && (
+            <Link
+              role="menuitem"
+              to="/#devotion-reminder"
+              onClick={() => setOpen(false)}
+              className="flex w-full items-center gap-2.5 border-t border-line px-3.5 py-2.5 text-left text-sm text-ink transition-colors hover:bg-raised"
+            >
+              <BellIcon width={16} height={16} className="text-muted" /> Devotion reminder
+            </Link>
+          )}
           {isAdminEmail(user?.email) && (
             <Link
               role="menuitem"
