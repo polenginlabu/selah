@@ -1,11 +1,11 @@
 // Bible read-aloud — the server half.
 //
-// Turns one chunk of public-domain Scripture into speech with Gemini TTS and
+// Turns one chunk of Scripture into speech with Gemini TTS and
 // returns it as a WAV. Deployed as a Supabase Edge Function so the Gemini key
 // never reaches the browser; every request carries the caller's Supabase JWT
 // and is verified below, same boundary as bible-chat.
 //
-// The client sends the text because the bundled Scripture is not available
+// The client sends the text because the chapter it is reading is not available
 // server-side. That makes this a signed-in, rate-limited, length-capped TTS
 // proxy restricted to the AUDIO_TRANSLATIONS allow-list — nothing more.
 //
@@ -22,7 +22,9 @@ const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') ?? ''
 const MODEL = Deno.env.get('GEMINI_TTS_MODEL') ?? 'gemini-2.5-flash-preview-tts'
 const VOICE = Deno.env.get('GEMINI_TTS_VOICE') ?? 'Kore'
 // A DB read must never be able to uncap read-aloud, so this is a constant.
-const RATE_LIMIT_PER_MINUTE = Number(Deno.env.get('TTS_RATE_LIMIT') ?? '12')
+// The client starts with a small chunk and prefetches ahead, so a chapter costs
+// a few more requests than one-big-chunk-at-a-time did.
+const RATE_LIMIT_PER_MINUTE = Number(Deno.env.get('TTS_RATE_LIMIT') ?? '30')
 // Keep in sync with TTS_MAX_CHUNK_CHARS in src/lib/bibleTts.js.
 const MAX_CHUNK_CHARS = 1200
 // Under the Edge Function wall clock so we answer before the platform kills us.

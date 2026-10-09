@@ -5,13 +5,110 @@
 // Run: npm run card:test
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { chunkVerses, TTS_MAX_CHUNK_CHARS } from './bibleTts.js'
-import { AUDIO_TRANSLATIONS } from '../../supabase/functions/_shared/bible.js'
+import { chunkVerses, planChunks, chunkKey, nextToFetch, wavDurationSec, timeline, locateTime, verseAt, verseStart, planVerses, TTS_MAX_CHUNK_CHARS, TTS_CHARS_PER_SEC } from './bibleTts.js'
+import { AUDIO_TRANSLATIONS, API_BIBLES } from '../../supabase/functions/_shared/bible.js'
 
 const words = (s) => s.split(/\s+/).filter(Boolean)
 
-test('audio is offered only for the bundled public-domain translations', () => {
-  assert.deepEqual(AUDIO_TRANSLATIONS, ['web', 'kjv', 'bbe'])
+test('audio is offered for every translation the reader supports', () => {
+  for (const id of [...API_BIBLES.map((b) => b.id), 'esv', 'nlt', 'web', 'kjv', 'bbe']) {
+    assert.ok(AUDIO_TRANSLATIONS.includes(id), `missing ${id}`)
+  }
+  assert.ok(!AUDIO_TRANSLATIONS.includes('bogus'))
+})
+
+const sample = (n, text = (i) => `Verse ${i} says the Lord is my shepherd and I shall not want.`) =>
+  Array.from({ length: n }, (_, i) => ({ verse: i + 1, text: text(i + 1) }))
+
+test('planChunks: the first chunk is small and ends on a verse boundary', () => {
+  const plan = planChunks(sample(30), { firstMax: 220, maxChars: 900 })
+  assert.ok(plan[0].text.length <= 220)
+  assert.ok(plan[0].marks.length >= 2, 'packs whole short verses into the first chunk')
+  // Later chunks grow (doubling) up to the cap, so few requests per chapter.
+  assert.ok(plan[1].text.length > plan[0].text.length)
+  for (const [i, c] of plan.entries()) assert.ok(c.text.length <= Math.min(900, 220 * 2 ** i), `chunk ${i} too long`)
+})
+
+test('planChunks: a long first verse is split so audio still starts quickly', () => {
+  const long = 'In the beginning was the Word. And the Word was with God. And the Word was God. The same was in the beginning with God. All things were made by him. And without him was not any thing made that was made.'
+  const plan = planChunks([{ verse: 1, text: long }, { verse: 2, text: 'In him was life.' }], { firstMax: 60, maxChars: 900 })
+  assert.ok(plan[0].text.length <= 60)
+  assert.deepEqual(plan[0].marks, [{ verse: 1, at: 0 }])
+  assert.equal(plan[1].marks[0].verse, 1, 'the rest of verse 1 maps back to verse 1')
+  assert.deepEqual(words(plan.map((c) => c.text).join(' ')), words(`${long} In him was life.`))
+})
+
+test('planChunks: keeps every word in order, no chunk over the hard cap, marks point at verse starts', () => {
+  const verses = sample(176, (i) => `Verse ${i} blessed are the undefiled in the way. `.repeat(1 + (i % 4)))
+  verses[50].text = Array.from({ length: 400 }, (_, i) => `w${i}`).join(' ')
+  verses[3].text = '   '
+  const plan = planChunks(verses)
+  for (const c of plan) assert.ok(c.text && c.text.length <= TTS_MAX_CHUNK_CHARS)
+  assert.deepEqual(words(plan.map((c) => c.text).join(' ')), words(verses.map((v) => v.text).join(' ')))
+  for (const c of plan) for (const m of c.marks) {
+    if (m.verse !== 51) assert.ok(c.text.slice(m.at).startsWith(`Verse ${m.verse} `), `mark ${m.verse}`)
+  }
+  assert.ok(!planVerses(plan).includes(4), 'blank verses are not read')
+  assert.equal(planVerses(plan).length, 175)
+  assert.deepEqual(planChunks([]), [])
+  assert.deepEqual(planChunks(undefined), [])
+})
+
+test('planChunks: bridged rows keep their row verse', () => {
+  const plan = planChunks([{ verse: 1, endVerse: 2, text: 'One and two.' }, { verse: 3, text: 'Three.' }])
+  assert.deepEqual(plan[0].marks.map((m) => m.verse), [1, 3])
+})
+
+test('chunkKey is deterministic and changes with every field', () => {
+  const base = { translation: 'nivuk', book: 'John', chapter: 3, text: 'For God so loved the world', voice: 'Kore' }
+  assert.equal(chunkKey(base), chunkKey({ ...base }))
+  for (const change of [{ translation: 'msg' }, { book: 'Luke' }, { chapter: 4 }, { text: 'For God so loved the world.' }, { voice: 'Puck' }]) {
+    assert.notEqual(chunkKey({ ...base, ...change }), chunkKey(base), JSON.stringify(change))
+  }
+})
+
+test('nextToFetch: looks ahead, caps in-flight requests, skips ready ones', () => {
+  const none = new Set()
+  assert.deepEqual(nextToFetch({ total: 5, cursor: 0, ready: none, inflight: none }), [0, 1])
+  assert.deepEqual(nextToFetch({ total: 5, cursor: 0, ready: new Set([0]), inflight: none }), [1, 2])
+  assert.deepEqual(nextToFetch({ total: 5, cursor: 0, ready: new Set([0]), inflight: new Set([1]) }), [2])
+  assert.deepEqual(nextToFetch({ total: 5, cursor: 0, ready: none, inflight: new Set([0, 1]) }), [])
+  assert.deepEqual(nextToFetch({ total: 5, cursor: 3, ready: new Set([3]), inflight: none }), [4], 'stops at the end')
+  assert.deepEqual(nextToFetch({ total: 5, cursor: 1, ready: new Set([0, 1, 2, 3]), inflight: none }), [], 'nothing past the lookahead')
+  assert.deepEqual(nextToFetch({ total: 1, cursor: 0, ready: none, inflight: none, lookahead: 2 }), [0])
+})
+
+test('nextToFetch: pauses during a rate-limit cooldown and resumes after', () => {
+  const args = { total: 5, cursor: 0, ready: new Set(), inflight: new Set(), cooldownUntil: 10_000 }
+  assert.deepEqual(nextToFetch({ ...args, now: 9_999 }), [])
+  assert.deepEqual(nextToFetch({ ...args, now: 10_000 }), [0, 1])
+})
+
+test('wavDurationSec: 24 kHz 16-bit mono is 48000 bytes a second after the header', () => {
+  assert.equal(wavDurationSec(44 + 48000), 1)
+  assert.equal(wavDurationSec(10), 0)
+})
+
+test('timeline and locateTime use real durations where known, estimates elsewhere', () => {
+  const plan = [{ text: 'a'.repeat(TTS_CHARS_PER_SEC * 2), marks: [] }, { text: 'b'.repeat(TTS_CHARS_PER_SEC * 4), marks: [] }]
+  assert.deepEqual(timeline(plan), { starts: [0, 2], total: 6 })
+  assert.deepEqual(timeline(plan, [3]), { starts: [0, 3], total: 7 })
+  assert.deepEqual(locateTime(plan, [3], 1), { index: 0, offset: 1 })
+  assert.deepEqual(locateTime(plan, [3], 4), { index: 1, offset: 1 })
+  assert.deepEqual(locateTime(plan, [3], 0), { index: 0, offset: 0 })
+})
+
+test('verseAt and verseStart map between verses and chunk positions', () => {
+  const plan = [{ text: 'aaaa bbbb', marks: [{ verse: 1, at: 0 }, { verse: 2, at: 5 }] }, { text: 'cccc', marks: [{ verse: 3, at: 0 }] }]
+  assert.equal(verseAt(plan[0], 0), 1)
+  assert.equal(verseAt(plan[0], 0.4), 1)
+  assert.equal(verseAt(plan[0], 0.6), 2)
+  assert.equal(verseAt(plan[0], 1.5), 2)
+  assert.equal(verseAt(undefined, 0.5), null)
+  assert.deepEqual(verseStart(plan, 2), { index: 0, fraction: 5 / 9 })
+  assert.deepEqual(verseStart(plan, 3), { index: 1, fraction: 0 })
+  assert.equal(verseStart(plan, 9), null)
+  assert.deepEqual(planVerses(plan), [1, 2, 3])
 })
 
 test('packs short verses together in order', () => {

@@ -143,8 +143,19 @@ export default function BibleReader() {
   const [bookmark, setBookmark] = useState(() => bookmarkStateRef.current.bookmark)
   const bookmarkHydratedRef = useRef(false)
   const bookmarkEditRef = useRef(0)
+  // Read-aloud: the verse being read (highlighted and followed), the requestKey
+  // of the chapter whose player should start on its own (only the one "continue"
+  // navigated to), and when the reader last scrolled by hand so following never
+  // fights them.
+  const [readingVerse, setReadingVerse] = useState(null)
+  const [listenAutoStart, setListenAutoStart] = useState(null)
+  const manualScrollRef = useRef(0)
   const marked = isBookmarked(bookmark, position)
   const requestKey = `${book}:${chapter}:${translation}`
+  // Any other navigation before that player mounts cancels the auto-start.
+  useEffect(() => {
+    setListenAutoStart((key) => (key === requestKey ? key : null))
+  }, [requestKey])
   const current = chapterData?.requestKey === requestKey ? chapterData : null
   const version = ALL_BIBLES.find((b) => b.id === translation)
   const bookInfo = getBook(book)
@@ -192,6 +203,25 @@ export default function BibleReader() {
       if (target) articleRef.current?.querySelector(`[data-verse="${target.verse}"]`)?.scrollIntoView({ block: 'center' })
     }
   }, [current, loading])
+  useEffect(() => {
+    const mark = () => { manualScrollRef.current = Date.now() }
+    window.addEventListener('wheel', mark, { passive: true })
+    window.addEventListener('touchmove', mark, { passive: true })
+    return () => {
+      window.removeEventListener('wheel', mark)
+      window.removeEventListener('touchmove', mark)
+    }
+  }, [])
+  // Keep the verse being read in view, unless the reader scrolled in the last few seconds.
+  useEffect(() => {
+    if (readingVerse == null || Date.now() - manualScrollRef.current < 4000) return
+    const el = articleRef.current?.querySelector(`[data-verse="${readingVerse}"]`)
+    if (!el) return
+    const { top, bottom } = el.getBoundingClientRect()
+    if (top > window.innerHeight * 0.15 && bottom < window.innerHeight * 0.7) return
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    el.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' })
+  }, [readingVerse])
   useEffect(() => { saveStored('bible:position', position) }, [position])
   useEffect(() => {
     latestPositionRef.current = position
@@ -423,12 +453,22 @@ export default function BibleReader() {
   }
   const firstChapter = book === 'Genesis' && chapter === 1
   const lastChapter = book === 'Revelation' && chapter === 22
-  function changeChapter(delta) {
-    if ((delta < 0 && firstChapter) || (delta > 0 && lastChapter)) return
+  function chapterStep(delta) {
+    if ((delta < 0 && firstChapter) || (delta > 0 && lastChapter)) return null
     const index = BIBLE_BOOKS.findIndex((b) => b.name === book)
-    if (chapter + delta < 1) return goTo(BIBLE_BOOKS[index - 1].name, BIBLE_BOOKS[index - 1].chapters)
-    if (chapter + delta > bookInfo.chapters) return goTo(BIBLE_BOOKS[index + 1].name, 1)
-    goTo(book, chapter + delta)
+    if (chapter + delta < 1) return [BIBLE_BOOKS[index - 1].name, BIBLE_BOOKS[index - 1].chapters]
+    if (chapter + delta > bookInfo.chapters) return [BIBLE_BOOKS[index + 1].name, 1]
+    return [book, chapter + delta]
+  }
+  function changeChapter(delta) {
+    const target = chapterStep(delta)
+    if (target) goTo(...target)
+  }
+  function listenNextChapter() {
+    const target = chapterStep(1)
+    if (!target) return
+    setListenAutoStart(`${target[0]}:${target[1]}:${translation}`)
+    goTo(...target)
   }
   // Horizontal swipes on the passage change chapter. The start point is captured
   // on touchstart (per finger, so a second finger never mis-matches the gesture);
@@ -603,7 +643,9 @@ export default function BibleReader() {
     </div>}
 
     {current && !loading && !error && <>
-      {AUDIO_TRANSLATIONS.includes(translation) && <ListenPlayer key={requestKey} translation={translation} verses={current.verses} />}
+      {AUDIO_TRANSLATIONS.includes(translation) && <ListenPlayer key={requestKey} translation={translation} book={book} chapter={chapter} verses={current.verses}
+        autoStart={listenAutoStart === requestKey} onAutoStarted={() => setListenAutoStart(null)} onActiveVerse={setReadingVerse} hideMini={Boolean(selection)}
+        onNextChapter={lastChapter ? undefined : listenNextChapter} />}
       <article ref={articleRef} aria-label={`${book} ${chapter}, ${version.name}`} tabIndex={-1} className={`bible-passage ${font === 'serif' ? 'font-serif' : 'font-sans'}`} style={{ fontSize: `${fontSize}px` }}
         onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} onTouchCancel={handleTouchCancel} onClickCapture={handleArticleClickCapture} onKeyDown={handlePassageKeyDown}>
         {paragraphs.map((group, i) => <div key={`${group.key}-${i}`}>
@@ -611,7 +653,7 @@ export default function BibleReader() {
           <p className={verseMode ? 'mb-3' : 'mb-6'}>{group.verses.map((verse) => <span key={verse.verse}>
           <span role="button" tabIndex={0} data-verse={verse.verse} aria-pressed={selected.has(verse.verse)} aria-label={`Select ${book} ${chapter}:${verse.label ?? verse.verse}`}
             onClick={() => handleVerseTap(verse.verse)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleVerseTap(verse.verse) } }}
-            className={`bible-verse ${selected.has(verse.verse) ? 'bible-verse-selected' : ''}${isHighlightColor(highlights[verse.verse]) ? ` highlight-${highlights[verse.verse]}` : ''}`}>
+            className={`bible-verse ${selected.has(verse.verse) ? 'bible-verse-selected' : ''}${readingVerse === verse.verse ? ' bible-verse-reading' : ''}${isHighlightColor(highlights[verse.verse]) ? ` highlight-${highlights[verse.verse]}` : ''}`}>
             <sup className="mr-1.5 select-none font-sans text-[0.55em] font-semibold text-brand-strong dark:text-brand">{verse.label ?? verse.verse}</sup>{verse.text}
           </span>{' '}
         </span>)}</p>

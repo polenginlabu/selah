@@ -5,10 +5,10 @@ export const API_BIBLES = [
   { id: 'amp', bibleId: 'a81b73293d3080c9-01', abbreviation: 'AMP', name: 'Amplified Bible', description: 'Expanded wording for deeper understanding' },
 ]
 
-// Translations that may be read aloud by the bible-tts function. Only the
-// bundled public-domain texts: licensed translations (NIV UK, MSG, AMP, ESV,
-// NLT) do not grant audio rights, so they are deliberately excluded.
-export const AUDIO_TRANSLATIONS = ['web', 'kjv', 'bbe']
+// Translations that may be read aloud by the bible-tts function: every one the
+// reader offers. This is a personal app and the owner accepts licensing for
+// read-aloud. ESV/NLT ids live in src/data/bibleLegacy.js behind env tokens.
+export const AUDIO_TRANSLATIONS = [...API_BIBLES.map((b) => b.id), 'esv', 'nlt', 'web', 'kjv', 'bbe']
 
 // Canonical Protestant order, matching src/data/books.js.
 export const BOOK_IDS = 'GEN EXO LEV NUM DEU JOS JDG RUT 1SA 2SA 1KI 2KI 1CH 2CH EZR NEH EST JOB PSA PRO ECC SNG ISA JER LAM EZK DAN HOS JOL AMO OBA JON MIC NAM HAB ZEP HAG ZEC MAL MAT MRK LUK JHN ACT ROM 1CO 2CO GAL EPH PHP COL 1TH 2TH 1TI 2TI TIT PHM HEB JAS 1PE 2PE 1JN 2JN 3JN JUD REV'.split(' ')

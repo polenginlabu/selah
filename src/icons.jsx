@@ -62,6 +62,33 @@ export const TrashIcon = (props) => (
   </svg>
 )
 
+export const PlayIcon = (props) => (
+  <svg {...ICON_PROPS} {...props}>
+    <path d="M7 4.5v15a1 1 0 0 0 1.5.86l12-7.5a1 1 0 0 0 0-1.72l-12-7.5A1 1 0 0 0 7 4.5z" fill="currentColor" />
+  </svg>
+)
+
+export const PauseIcon = (props) => (
+  <svg {...ICON_PROPS} {...props}>
+    <rect x="6" y="4" width="4" height="16" rx="1" fill="currentColor" />
+    <rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor" />
+  </svg>
+)
+
+export const SkipBackIcon = (props) => (
+  <svg {...ICON_PROPS} {...props}>
+    <path d="M19 20L9 12l10-8v16z" fill="currentColor" />
+    <path d="M5 19V5" />
+  </svg>
+)
+
+export const SkipForwardIcon = (props) => (
+  <svg {...ICON_PROPS} {...props}>
+    <path d="M5 4l10 8-10 8V4z" fill="currentColor" />
+    <path d="M19 5v14" />
+  </svg>
+)
+
 export const ChevronLeftIcon = (props) => (
   <svg {...ICON_PROPS} {...props}>
     <path d="M15 18l-6-6 6-6" />
