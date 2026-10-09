@@ -41,13 +41,18 @@ export function chunkVerses(verses, maxChars = TTS_MAX_CHUNK_CHARS) {
   return chunks
 }
 
-// Small, roughly equal chunks: each takes a few seconds to synthesise, so the
-// whole chapter can be fetched in parallel from the moment play is pressed and
-// playback never outruns it. The first is smaller still so audio starts sooner.
-export const TTS_FIRST_CHUNK_CHARS = 160
-export const TTS_CHUNK_CHARS = 280
-// Requests in flight at once while prefetching a chapter.
-export const TTS_MAX_INFLIGHT = 5
+// Every chunk is one request against a small daily TTS quota, so chunks are
+// large (whole verses up to ~960 characters, about a minute of audio). The
+// first is small so audio starts after a few seconds; the rest are fetched in
+// playback order while it plays.
+export const TTS_FIRST_CHUNK_CHARS = 200
+export const TTS_CHUNK_CHARS = 960
+// Requests in flight at once while prefetching a chapter: starts at 2, halves
+// on 429/503 and grows back after successes (createConcurrency).
+export const TTS_START_INFLIGHT = 2
+export const TTS_MAX_INFLIGHT = 3
+// Failed tries of one chunk before the device voice takes over.
+export const TTS_MAX_ATTEMPTS = 3
 // Calm read-aloud is about 150 words a minute, roughly 14 characters a second.
 export const TTS_CHARS_PER_SEC = 14
 
@@ -112,7 +117,7 @@ export function chunkKey({ translation, book, chapter, text, voice = DEFAULT_VOI
  * and in-flight ones, never more than `maxInflight` at once, and nothing
  * during a rate-limit cooldown.
  */
-export function nextToFetch({ total, cursor, ready, inflight, maxInflight = TTS_MAX_INFLIGHT, cooldownUntil = 0, now = Date.now() }) {
+export function nextToFetch({ total, cursor, ready, inflight, maxInflight = TTS_START_INFLIGHT, cooldownUntil = 0, now = Date.now() }) {
   if (now < cooldownUntil) return []
   const start = []
   const from = Math.min(Math.max(0, cursor), Math.max(0, total - 1))
@@ -123,6 +128,43 @@ export function nextToFetch({ total, cursor, ready, inflight, maxInflight = TTS_
   }
   return start
 }
+
+/**
+ * Adaptive request concurrency: starts at `start`, halves (never below
+ * `min`) when the server throttles, and grows by one after `growAfter`
+ * successes in a row, up to `max`.
+ */
+export function createConcurrency({ start = TTS_START_INFLIGHT, min = 1, max = TTS_MAX_INFLIGHT, growAfter = 2 } = {}) {
+  let limit = start
+  let streak = 0
+  return {
+    get limit() { return limit },
+    success() {
+      streak += 1
+      if (streak >= growAfter && limit < max) {
+        limit += 1
+        streak = 0
+      }
+    },
+    throttle() {
+      streak = 0
+      limit = Math.max(min, Math.floor(limit / 2))
+    },
+  }
+}
+
+/**
+ * Wait before retry number `attempt` (0-based): exponential from baseMs, capped,
+ * with jitter (half fixed, half random) so clients do not retry in lockstep.
+ * A server Retry-After is a floor.
+ */
+export function backoffMs(attempt, { retryAfterSec = 0, baseMs = 2000, capMs = 60_000, rand = Math.random } = {}) {
+  const exp = Math.min(capMs, baseMs * 2 ** Math.max(0, attempt))
+  return Math.max(retryAfterSec * 1000, Math.round(exp / 2 + (exp / 2) * rand()))
+}
+
+/** The server has no AI voice left for a long while (daily quota): use the device voice. */
+export const isQuotaExhausted = (err) => err?.code === 'quota_exhausted'
 
 /** Seconds of audio in a 16-bit mono PCM WAV of `bytes` bytes (44-byte header). */
 export function wavDurationSec(bytes, sampleRate = 24000) {
@@ -171,29 +213,32 @@ export function planVerses(plan) {
   return [...new Set(plan.flatMap((chunk) => chunk.marks.map((m) => m.verse)))]
 }
 
-function ttsError(message, status, retryAfterSec) {
+function ttsError(message, status, retryAfterSec, code) {
   const err = new Error(message)
   err.status = status
   if (retryAfterSec) err.retryAfterSec = retryAfterSec
+  if (code) err.code = code
   return err
 }
 
 /**
- * Fetches one chunk as a WAV Blob. Throws an Error carrying `status` (and
- * `retryAfterSec` on 429); a transient 502/503 is retried once.
+ * Fetches one chunk as a WAV Blob, retrying a transient 502/503 once. Throws
+ * an Error carrying `status`, and `code` and `retryAfterSec` on 429. The
+ * player calls requestTtsChunk and does its own backoff.
  */
 export async function fetchTtsChunk(args) {
   try {
     return await requestTtsChunk(args)
   } catch (err) {
     if (err?.status !== 502 && err?.status !== 503) throw err
-    await new Promise((resolve) => setTimeout(resolve, 800))
+    await new Promise((resolve) => setTimeout(resolve, backoffMs(0, { baseMs: 1000 })))
     if (args.signal?.aborted) throw err
     return requestTtsChunk(args)
   }
 }
 
-async function requestTtsChunk({ translation, text, voice = DEFAULT_VOICE, style = DEFAULT_STYLE, signal }) {
+/** One request for one chunk as a WAV Blob; errors as fetchTtsChunk. */
+export async function requestTtsChunk({ translation, text, voice = DEFAULT_VOICE, style = DEFAULT_STYLE, signal }) {
   // Imported lazily so chunkVerses stays importable under node --test.
   const { supabase } = await import('./supabase')
   const {
@@ -213,8 +258,10 @@ async function requestTtsChunk({ translation, text, voice = DEFAULT_VOICE, style
   if (res.ok) return res.blob()
 
   const payload = await res.json().catch(() => ({}))
+  const code = typeof payload?.code === 'string' ? payload.code : undefined
+  // A daily limit can be hours away; a transient wait is capped at 5 minutes.
   const retryAfterSec = res.status === 429
-    ? Math.min(300, Math.max(1, Number(payload?.retryAfterSec) || Number(res.headers.get('Retry-After')) || 60))
+    ? Math.min(code === 'quota_exhausted' ? 86_400 : 300, Math.max(1, Number(payload?.retryAfterSec) || Number(res.headers.get('Retry-After')) || 60))
     : undefined
-  throw ttsError(payload?.error ?? 'Audio is unavailable right now.', res.status, retryAfterSec)
+  throw ttsError(payload?.error ?? 'Audio is unavailable right now.', res.status, retryAfterSec, code)
 }

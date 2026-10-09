@@ -5,7 +5,7 @@
 // Run: npm run card:test
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { chunkVerses, planChunks, chunkKey, nextToFetch, wavDurationSec, timeline, locateTime, verseAt, verseStart, planVerses, TTS_MAX_CHUNK_CHARS, TTS_CHARS_PER_SEC, TTS_CHUNK_CHARS, TTS_FIRST_CHUNK_CHARS, TTS_MAX_INFLIGHT } from './bibleTts.js'
+import { chunkVerses, planChunks, chunkKey, nextToFetch, wavDurationSec, timeline, locateTime, verseAt, verseStart, planVerses, createConcurrency, backoffMs, isQuotaExhausted, TTS_MAX_CHUNK_CHARS, TTS_CHARS_PER_SEC, TTS_CHUNK_CHARS, TTS_FIRST_CHUNK_CHARS, TTS_MAX_INFLIGHT, TTS_START_INFLIGHT } from './bibleTts.js'
 import { AUDIO_TRANSLATIONS, API_BIBLES } from '../../supabase/functions/_shared/bible.js'
 
 const words = (s) => s.split(/\s+/).filter(Boolean)
@@ -20,11 +20,18 @@ test('audio is offered for every translation the reader supports', () => {
 const sample = (n, text = (i) => `Verse ${i} says the Lord is my shepherd and I shall not want.`) =>
   Array.from({ length: n }, (_, i) => ({ verse: i + 1, text: text(i + 1) }))
 
+test('chunk sizes: a fast-start first chunk, then large chunks to save daily requests', () => {
+  assert.ok(TTS_FIRST_CHUNK_CHARS >= 160 && TTS_FIRST_CHUNK_CHARS <= 220)
+  assert.ok(TTS_CHUNK_CHARS >= 900 && TTS_CHUNK_CHARS <= 1000)
+  assert.ok(TTS_CHUNK_CHARS < TTS_MAX_CHUNK_CHARS)
+})
+
 test('planChunks: a small first chunk, then roughly equal whole-verse chunks', () => {
-  const plan = planChunks(sample(30))
-  assert.ok(plan[0].text.length <= TTS_FIRST_CHUNK_CHARS)
+  const plan = planChunks(sample(60))
+  assert.ok(plan[0].text.length <= TTS_FIRST_CHUNK_CHARS && plan[0].text.length >= 160, `first chunk of ${plan[0].text.length}`)
   assert.ok(plan[0].marks.length >= 2, 'packs whole short verses into the first chunk')
-  // Every later chunk is near the cap rather than growing, so each is quick to synthesise.
+  // Every later chunk is filled close to the cap, so a chapter costs few requests.
+  assert.ok(plan.length >= 4)
   for (const c of plan.slice(1, -1)) assert.ok(c.text.length <= TTS_CHUNK_CHARS && c.text.length > TTS_CHUNK_CHARS - 70, `chunk of ${c.text.length}`)
   assert.ok(plan.at(-1).text.length <= TTS_CHUNK_CHARS)
   // Whole verses: every chunk starts at a verse start.
@@ -73,28 +80,75 @@ test('chunkKey is deterministic and changes with every field', () => {
 
 test('nextToFetch: fetches the whole chapter in playback order, capped in flight', () => {
   const none = new Set()
-  assert.deepEqual(nextToFetch({ total: 20, cursor: 0, ready: none, inflight: none }), [0, 1, 2, 3, 4])
-  assert.equal(TTS_MAX_INFLIGHT, 5)
-  assert.deepEqual(nextToFetch({ total: 20, cursor: 0, ready: new Set([0, 1]), inflight: new Set([2]) }), [3, 4, 5, 6])
-  assert.deepEqual(nextToFetch({ total: 20, cursor: 0, ready: none, inflight: new Set([0, 1, 2, 3, 4]) }), [])
+  assert.equal(TTS_START_INFLIGHT, 2)
+  assert.deepEqual(nextToFetch({ total: 20, cursor: 0, ready: none, inflight: none }), [0, 1], 'starts at 2, never a burst')
+  assert.deepEqual(nextToFetch({ total: 20, cursor: 0, ready: none, inflight: none, maxInflight: 5 }), [0, 1, 2, 3, 4])
+  assert.deepEqual(nextToFetch({ total: 20, cursor: 0, ready: new Set([0, 1]), inflight: new Set([2]), maxInflight: 5 }), [3, 4, 5, 6])
+  assert.deepEqual(nextToFetch({ total: 20, cursor: 0, ready: none, inflight: new Set([0, 1]) }), [])
   // Far ahead of the cursor is fetched too: no lookahead gate.
-  assert.deepEqual(nextToFetch({ total: 20, cursor: 0, ready: new Set(Array.from({ length: 17 }, (_, i) => i)), inflight: none }), [17, 18, 19])
-  assert.deepEqual(nextToFetch({ total: 3, cursor: 0, ready: none, inflight: none }), [0, 1, 2])
-  assert.deepEqual(nextToFetch({ total: 20, cursor: 0, ready: none, inflight: none, maxInflight: 2 }), [0, 1])
+  assert.deepEqual(nextToFetch({ total: 20, cursor: 0, ready: new Set(Array.from({ length: 17 }, (_, i) => i)), inflight: none, maxInflight: 5 }), [17, 18, 19])
+  assert.deepEqual(nextToFetch({ total: 3, cursor: 0, ready: none, inflight: none, maxInflight: 5 }), [0, 1, 2])
+  assert.deepEqual(nextToFetch({ total: 20, cursor: 0, ready: none, inflight: none, maxInflight: 1 }), [0])
   assert.deepEqual(nextToFetch({ total: 0, cursor: 0, ready: none, inflight: none }), [])
 })
 
 test('nextToFetch: after a seek, the cursor and what follows come first, then wraps', () => {
   const none = new Set()
-  assert.deepEqual(nextToFetch({ total: 10, cursor: 7, ready: none, inflight: none }), [7, 8, 9, 0, 1])
-  assert.deepEqual(nextToFetch({ total: 10, cursor: 7, ready: new Set([7, 8, 9, 0]), inflight: none }), [1, 2, 3, 4, 5])
+  assert.deepEqual(nextToFetch({ total: 10, cursor: 7, ready: none, inflight: none, maxInflight: 5 }), [7, 8, 9, 0, 1])
+  assert.deepEqual(nextToFetch({ total: 10, cursor: 7, ready: new Set([7, 8, 9, 0]), inflight: none, maxInflight: 5 }), [1, 2, 3, 4, 5])
   assert.deepEqual(nextToFetch({ total: 5, cursor: 2, ready: new Set([0, 1, 2, 3, 4]), inflight: none }), [], 'all ready')
 })
 
 test('nextToFetch: an out-of-range cursor is clamped, not skipped past', () => {
   const none = new Set()
-  assert.deepEqual(nextToFetch({ total: 4, cursor: 99, ready: none, inflight: none }), [3, 0, 1, 2])
-  assert.deepEqual(nextToFetch({ total: 4, cursor: -3, ready: none, inflight: none }), [0, 1, 2, 3])
+  assert.deepEqual(nextToFetch({ total: 4, cursor: 99, ready: none, inflight: none, maxInflight: 4 }), [3, 0, 1, 2])
+  assert.deepEqual(nextToFetch({ total: 4, cursor: -3, ready: none, inflight: none, maxInflight: 4 }), [0, 1, 2, 3])
+})
+
+test('createConcurrency: starts at 2, halves on throttle (never below 1), grows after successes up to the cap', () => {
+  const c = createConcurrency()
+  assert.equal(c.limit, 2)
+  c.throttle()
+  assert.equal(c.limit, 1)
+  c.throttle()
+  assert.equal(c.limit, 1, 'never below 1')
+  c.success()
+  assert.equal(c.limit, 1, 'one success is not enough')
+  c.success()
+  assert.equal(c.limit, 2)
+  c.success()
+  c.throttle()
+  c.success()
+  assert.equal(c.limit, 1, 'a throttle resets the success streak')
+  for (let n = 0; n < 20; n += 1) c.success()
+  assert.equal(c.limit, TTS_MAX_INFLIGHT, 'capped')
+  assert.ok(TTS_MAX_INFLIGHT <= 3, 'a free-tier model allows 3 requests a minute')
+  const wide = createConcurrency({ start: 4, max: 4 })
+  wide.throttle()
+  assert.equal(wide.limit, 2)
+})
+
+test('backoffMs: exponential with jitter, capped, Retry-After is a floor', () => {
+  const lo = () => 0
+  const hi = () => 1
+  assert.equal(backoffMs(0, { rand: lo }), 1000)
+  assert.equal(backoffMs(0, { rand: hi }), 2000)
+  assert.equal(backoffMs(1, { rand: lo }), 2000)
+  assert.equal(backoffMs(2, { rand: hi }), 8000)
+  for (let a = 0; a < 5; a += 1) {
+    const ms = backoffMs(a, {})
+    assert.ok(ms >= 1000 * 2 ** a && ms <= 2000 * 2 ** a, `attempt ${a}: ${ms}`)
+  }
+  assert.equal(backoffMs(20, { rand: hi }), 60_000, 'capped')
+  assert.equal(backoffMs(0, { rand: hi, retryAfterSec: 30 }), 30_000, 'Retry-After wins when longer')
+  assert.equal(backoffMs(3, { rand: hi, retryAfterSec: 1 }), 16_000, 'backoff wins when longer')
+})
+
+test('isQuotaExhausted keys off the server code, not the status', () => {
+  assert.ok(isQuotaExhausted({ status: 429, code: 'quota_exhausted' }))
+  assert.ok(!isQuotaExhausted({ status: 429, code: 'rate_limited' }))
+  assert.ok(!isQuotaExhausted({ status: 429 }))
+  assert.ok(!isQuotaExhausted(null))
 })
 
 test('nextToFetch: pauses during a rate-limit cooldown and resumes after', () => {

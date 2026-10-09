@@ -72,9 +72,10 @@ export default function ListenVoiceSheet({ voice, style, playing, onVoice, onSty
     } catch (err) {
       if (request.current !== controller || err?.name === 'AbortError') return
       stopPreview()
-      setError(err?.status === 429 ? 'Previews are paused for a minute. Try again shortly.'
-        : err?.status === 401 ? 'Sign in to hear a preview.'
-          : err?.message || 'That preview is unavailable right now.')
+      setError(err?.code === 'quota_exhausted' ? 'The AI voice has reached its daily limit. Previews are back tomorrow.'
+        : err?.status === 429 ? 'The AI voice is busy. Try the preview again shortly.'
+          : err?.status === 401 ? 'Sign in to hear a preview.'
+            : 'That preview is unavailable right now.')
     }
   }
 
