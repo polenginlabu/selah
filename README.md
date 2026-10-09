@@ -67,6 +67,21 @@ token is reported through its browser tracker when Scripture is displayed. Licen
 chapters are not persisted to localStorage or the service worker cache. Run parser
 and canonical-book validation tests with `npm run bible:test`.
 
+**Listen** reads a chapter aloud for WEB, KJV and BBE only (licensed translations
+are excluded). Audio is generated on tap by Gemini TTS through the authenticated
+`bible-tts` Edge Function, a chunk at a time, and is never stored. The Gemini key
+is an Edge Function secret only — never a `VITE_` variable. Apply
+`supabase/migrations/20261011_tts_rate_limit.sql` (per-user limit, default 12
+requests a minute via `TTS_RATE_LIMIT`), then from your own shell:
+
+```bash
+supabase secrets set GEMINI_API_KEY=<your key>
+supabase functions deploy bible-tts --no-verify-jwt
+```
+
+Optional secrets: `GEMINI_TTS_MODEL` (default `gemini-2.5-flash-preview-tts`) and
+`GEMINI_TTS_VOICE` (default `Kore`).
+
 Selecting a verse and tapping **Share** opens a shareable Scripture card drawn
 over the day's AI-generated background — see
 [Verse sharing with daily backgrounds](#verse-sharing-with-daily-backgrounds).

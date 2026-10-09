@@ -5,13 +5,14 @@ import { useToast } from '../context/ToastContext'
 import { useAuth } from '../context/AuthContext'
 import { ChevronLeftIcon, ChevronRightIcon, ChevronDownIcon, SearchIcon, BookOpenIcon, BookmarkIcon, CheckIcon, DownloadIcon } from '../icons'
 import { BIBLE_BOOKS, getBook } from '../data/books'
-import { API_BIBLES, PUBLIC_BIBLES, bibleRequest, getBibleChapter, trackBibleView } from '../data/bible'
+import { API_BIBLES, AUDIO_TRANSLATIONS, PUBLIC_BIBLES, bibleRequest, getBibleChapter, trackBibleView } from '../data/bible'
 import { LEGACY_BIBLES, getLegacyChapter } from '../data/bibleLegacy'
 import { formatSelectionReference } from '../../supabase/functions/_shared/bible.js'
 import { BibleReaderSheet, BibleLocationPicker, BibleSearch, SavedVersesSheet } from '../components/BibleReaderSheet'
 import { VerseCardSheet } from '../components/VerseCard'
 import VerseActions from '../components/VerseActions'
 import ExplainSheet from '../components/ExplainSheet'
+import ListenPlayer from '../components/ListenPlayer'
 import { getReadingPosition, saveReadingPosition } from '../data/readingPosition'
 import { getBookmark, saveBookmark, clearBookmark } from '../data/bookmark'
 import { getStoredHighlights, saveStoredHighlights, fetchHighlights, saveHighlights } from '../data/highlights'
@@ -602,6 +603,7 @@ export default function BibleReader() {
     </div>}
 
     {current && !loading && !error && <>
+      {AUDIO_TRANSLATIONS.includes(translation) && <ListenPlayer key={requestKey} translation={translation} verses={current.verses} />}
       <article ref={articleRef} aria-label={`${book} ${chapter}, ${version.name}`} tabIndex={-1} className={`bible-passage ${font === 'serif' ? 'font-serif' : 'font-sans'}`} style={{ fontSize: `${fontSize}px` }}
         onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} onTouchCancel={handleTouchCancel} onClickCapture={handleArticleClickCapture} onKeyDown={handlePassageKeyDown}>
         {paragraphs.map((group, i) => <div key={`${group.key}-${i}`}>

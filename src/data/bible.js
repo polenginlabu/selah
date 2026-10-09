@@ -1,10 +1,10 @@
 import { supabase } from '../lib/supabase'
 import { BIBLE_BOOKS } from './books'
-import { API_BIBLES, BOOK_IDS } from '../../supabase/functions/_shared/bible.js'
+import { API_BIBLES, AUDIO_TRANSLATIONS, BOOK_IDS } from '../../supabase/functions/_shared/bible.js'
 import { loadPublicBook } from './publicBibles/index.js'
 import { toChapterResult } from './publicBibles/shape.js'
 
-export { API_BIBLES, BOOK_IDS }
+export { API_BIBLES, AUDIO_TRANSLATIONS, BOOK_IDS }
 export const PUBLIC_BIBLES = [
   { id: 'web', abbreviation: 'WEB', name: 'World English Bible', description: 'Modern English · public domain' },
   { id: 'kjv', abbreviation: 'KJV', name: 'King James Version', description: 'Traditional English · 1611' },
