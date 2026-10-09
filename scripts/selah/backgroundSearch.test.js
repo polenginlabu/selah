@@ -11,7 +11,7 @@ import assert from 'node:assert/strict'
 import {
   DENY_WORDS, DEFAULT_STYLE_TERM, MAX_PHRASE_LEN, MAX_PHRASES, MAX_DENY_WORDS,
   cleanPhrase, cleanDenyWord, normalizeSettings, activeSettings, toSettingsRow,
-  mergeQueries, mergeDenyWords, providerParams,
+  mergeQueries, mergeDenyWords, providerParams, shouldSkipFetch,
 } from '../../supabase/functions/_shared/backgroundSearch.js'
 import {
   buildImageQueries, styleQueries, deniedWord, denySet, rejectionReason, rankCandidates,
@@ -64,6 +64,7 @@ test('an empty row normalises to the built-in behaviour', () => {
   assert.deepEqual(normalizeSettings({}), {
     enabled: true, phrases: [], mode: 'first', styleTerm: DEFAULT_STYLE_TERM, denyWords: [],
     imageType: 'illustration', usePixabay: true, useOpenverse: true,
+    useDefaultPhoto: false, defaultBackgroundId: null,
   })
   assert.equal(DEFAULT_STYLE_TERM, STYLE_TERM)
 })
@@ -229,9 +230,50 @@ test('toSettingsRow writes the singleton row, cleaned', () => {
   assert.deepEqual(row, {
     id: true, enabled: true, phrases: ['calm sea'], mode: 'only', style_term: '', deny_words: ['car'],
     image_type: 'photo', use_pixabay: false, use_openverse: true,
+    use_default_photo: false, default_background_id: null,
   })
   assert.deepEqual(normalizeSettings(row), {
     enabled: true, phrases: ['calm sea'], mode: 'only', styleTerm: '', denyWords: ['car'],
     imageType: 'photo', usePixabay: false, useOpenverse: true,
+    useDefaultPhoto: false, defaultBackgroundId: null,
   })
+})
+
+// --- Default photo ---------------------------------------------------------
+
+const BG_ID = '0b6f3c1e-5d2a-4f7b-9c8e-1a2b3c4d5e6f'
+
+test('the default photo round-trips; a bad id or a non-true flag is dropped', () => {
+  const row = toSettingsRow({ useDefaultPhoto: true, defaultBackgroundId: BG_ID })
+  assert.equal(row.use_default_photo, true)
+  assert.equal(row.default_background_id, BG_ID)
+  const s = normalizeSettings(row)
+  assert.equal(s.useDefaultPhoto, true)
+  assert.equal(s.defaultBackgroundId, BG_ID)
+
+  for (const bad of ['', 'x', `${BG_ID}'; drop`, 42, {}, null]) {
+    assert.equal(normalizeSettings({ default_background_id: bad }).defaultBackgroundId, null, String(bad))
+  }
+  for (const flag of ['true', 1, null, undefined]) {
+    assert.equal(normalizeSettings({ use_default_photo: flag }).useDefaultPhoto, false, String(flag))
+  }
+})
+
+test('turning the default photo off keeps the picked photo', () => {
+  const row = toSettingsRow({ useDefaultPhoto: false, defaultBackgroundId: BG_ID })
+  assert.equal(row.use_default_photo, false)
+  assert.equal(row.default_background_id, BG_ID)
+})
+
+test('shouldSkipFetch: only when the default photo is on and one is picked', () => {
+  assert.equal(shouldSkipFetch({ use_default_photo: true, default_background_id: BG_ID }), true)
+  // The search settings' own enabled flag does not matter.
+  assert.equal(shouldSkipFetch({ enabled: false, use_default_photo: true, default_background_id: BG_ID }), true)
+  assert.equal(shouldSkipFetch({ use_default_photo: false, default_background_id: BG_ID }), false)
+  assert.equal(shouldSkipFetch({ use_default_photo: true, default_background_id: null }), false)
+  assert.equal(shouldSkipFetch({ use_default_photo: true, default_background_id: 'not-a-uuid' }), false)
+  assert.equal(shouldSkipFetch({ use_default_photo: 'true', default_background_id: BG_ID }), false)
+  for (const row of [null, undefined, 'x', 42, [], {}]) {
+    assert.equal(shouldSkipFetch(row), false, JSON.stringify(row))
+  }
 })

@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabase'
 import { todayISO } from '../lib/date'
+import { resolveBackground } from '../lib/defaultBackground'
 
 // The browser half of the SELAH daily background.
 //
@@ -42,26 +43,64 @@ export async function getBackgroundForDate(date) {
 }
 
 /**
- * The most recent background on or before `date`.
+ * The background to show for `date`: the admin's default photo when "Use
+ * default photo" is on (Admin → Background search), otherwise the most recent
+ * background on or before `date`.
  *
- * Used by the verse card so that a single failed night degrades to yesterday's
- * image rather than straight to the gradient. Backgrounds are not tied to the
- * verse or the day's devotion — they are just the day's art — so showing a
- * recent one is honest.
+ * Falling back to the most recent one means a single failed night degrades to
+ * yesterday's image rather than straight to the gradient. Backgrounds are not
+ * tied to the verse or the day's devotion — they are just the day's art — so
+ * showing a recent one is honest.
  */
 export async function getLatestBackground(date = todayISO()) {
+  const [defaultPhoto, { data, error }] = await Promise.all([
+    getDefaultBackground(),
+    supabase
+      .from('daily_backgrounds')
+      .select('*')
+      .lte('date', date)
+      .order('date', { ascending: false })
+      .limit(1),
+  ])
+
+  if (error) console.warn('latest background fetch failed', error)
+  return resolveBackground(defaultPhoto, !error && data?.[0] ? mapRow(data[0]) : null)
+}
+
+/**
+ * The admin's default photo: {enabled, id, imageUrl, attribution}, or null
+ * when it cannot be read (e.g. the migration is not applied yet). enabled is
+ * false when the option is off or the picked photo no longer exists. Read
+ * through get_default_background(), because the settings table is admin-only.
+ */
+export async function getDefaultBackground() {
+  const { data, error } = await supabase.rpc('get_default_background')
+  if (error) {
+    console.warn('default background fetch failed', error)
+    return null
+  }
+  const row = Array.isArray(data) ? data[0] : data
+  if (!row) return null
+  return {
+    enabled: row.enabled === true,
+    id: row.background_id ?? null,
+    imageUrl: row.image_url ?? null,
+    attribution: row.attribution ?? null,
+  }
+}
+
+/** One background by its id, or null — for showing the admin's picked photo. */
+export async function getBackgroundById(id) {
   const { data, error } = await supabase
     .from('daily_backgrounds')
     .select('*')
-    .lte('date', date)
-    .order('date', { ascending: false })
-    .limit(1)
-
+    .eq('id', id)
+    .maybeSingle()
   if (error) {
-    console.warn('latest background fetch failed', error)
+    console.warn('background fetch failed', error)
     return null
   }
-  return data?.[0] ? mapRow(data[0]) : null
+  return data ? mapRow(data) : null
 }
 
 /**

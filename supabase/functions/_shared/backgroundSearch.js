@@ -55,6 +55,8 @@ export const IMAGE_TYPES = {
 const PHRASE_RE = /^[\p{L}\p{N}' -]+$/u
 // Deny words are matched against [a-z']+ tokens, so anything else could never match.
 const DENY_RE = /^[a-z']+$/
+// A daily_backgrounds.id: the default photo's reference.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /** A cleaned search phrase, or null when it is empty, too long or has other characters. */
 export function cleanPhrase(value, maxLen = MAX_PHRASE_LEN) {
@@ -106,6 +108,10 @@ export function normalizeSettings(row) {
     imageType: Object.hasOwn(IMAGE_TYPES, r.image_type) ? r.image_type : 'illustration',
     usePixabay,
     useOpenverse,
+    useDefaultPhoto: r.use_default_photo === true,
+    defaultBackgroundId: typeof r.default_background_id === 'string' && UUID_RE.test(r.default_background_id)
+      ? r.default_background_id
+      : null,
   }
 }
 
@@ -130,6 +136,8 @@ export function toSettingsRow(settings) {
     image_type: settings?.imageType,
     use_pixabay: settings?.usePixabay,
     use_openverse: settings?.useOpenverse,
+    use_default_photo: settings?.useDefaultPhoto,
+    default_background_id: settings?.defaultBackgroundId,
   })
   return {
     id: true,
@@ -141,7 +149,21 @@ export function toSettingsRow(settings) {
     image_type: s.imageType,
     use_pixabay: s.usePixabay,
     use_openverse: s.useOpenverse,
+    use_default_photo: s.useDefaultPhoto,
+    default_background_id: s.defaultBackgroundId,
   }
+}
+
+/**
+ * True when the nightly job should not fetch a stock image: the default photo
+ * is on and one is picked. Reads the raw row, so the search `enabled` flag does
+ * not matter. If the picked row has been deleted its id is already null (the
+ * foreign key sets it), so the job fetches again.
+ */
+export function shouldSkipFetch(row) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return false
+  const s = normalizeSettings(row)
+  return s.useDefaultPhoto && s.defaultBackgroundId !== null
 }
 
 /**

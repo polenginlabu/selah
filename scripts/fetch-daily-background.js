@@ -14,7 +14,9 @@
 // The admin's background_search_settings row (Admin → Background search) can
 // put its own phrases first or instead, add deny words, and change the style
 // word, image type and providers. A missing, disabled or unreadable row means
-// the defaults.
+// the defaults. While its "Use default photo" is on with a photo picked, the
+// app shows that photo every day, so the job writes nothing and contacts no
+// provider (unless --force or --dry-run).
 //
 // Idempotent by date: an existing row means nothing to do, and no provider is
 // contacted. --force replaces the row and the image.
@@ -47,7 +49,7 @@ import {
   minShortSide, NO_REPEAT_DAYS,
 } from './selah/stockBackground.js'
 import {
-  activeSettings, mergeQueries, providerParams,
+  activeSettings, mergeQueries, providerParams, shouldSkipFetch,
 } from '../supabase/functions/_shared/backgroundSearch.js'
 
 /** How many ranked candidates to try before giving up on downloads. */
@@ -131,7 +133,10 @@ async function main() {
       const res = await admin.from('background_search_settings').select('*').eq('id', true).maybeSingle()
       if (res.error) log(`background search settings: using defaults (${res.error.message})`)
       else if (!res.data) log('background search settings: using defaults (no settings row)')
-      else {
+      else if (!args.force && !args.dryRun && shouldSkipFetch(res.data)) {
+        log('the default photo is on (Admin → Background search) — skipping the stock search')
+        return
+      } else {
         settings = activeSettings(res.data)
         if (!settings) log('background search settings: using defaults (disabled)')
       }

@@ -16,6 +16,7 @@ import {
   CheckIcon,
 } from '../icons'
 import { AskAgentPanel } from '../components/AskAgentPanel'
+import { DefaultPhotoPicker } from '../components/DefaultPhotoPicker'
 import { getBridgeHealth, listBridgeModels, setBridgeModel } from '../data/bridge'
 import { formatDateShort, todayISO } from '../lib/date'
 import {
@@ -704,6 +705,7 @@ function BackgroundSearchPanel() {
 
   const patch = (p) => setS((cur) => ({ ...cur, ...p }))
   const busy = loading || saving || Boolean(loadError)
+  const needsPhoto = s.useDefaultPhoto && !s.defaultBackgroundId
 
   const addPhrase = () => {
     const p = cleanPhrase(newPhrase)
@@ -745,11 +747,17 @@ function BackgroundSearchPanel() {
 
   const save = async () => {
     if (busy) return
+    if (needsPhoto) {
+      toast.error('Pick a default photo, or turn “Use default photo” off.')
+      return
+    }
     setSaving(true)
     try {
       setS(await saveBackgroundSearchSettings(s))
       toast.success(
-        !s.enabled
+        s.useDefaultPhoto
+          ? 'Saved — the default photo is shown every day.'
+          : !s.enabled
           ? 'Saved — the nightly search uses its defaults.'
           : s.phrases.length
             ? `Saved — ${s.phrases.length} phrase${s.phrases.length === 1 ? '' : 's'} ${s.mode === 'only' ? 'only' : 'first'}.`
@@ -791,6 +799,37 @@ function BackgroundSearchPanel() {
           </button>
         </div>
       )}
+
+      {/* Default photo */}
+      <div className="space-y-2 rounded-xl border border-line p-3">
+        <label className="flex items-center gap-2 text-sm text-ink">
+          <input
+            type="checkbox"
+            checked={s.useDefaultPhoto}
+            onChange={(e) => patch({ useDefaultPhoto: e.target.checked })}
+            disabled={busy}
+          />
+          Use default photo
+        </label>
+        <p className="text-xs text-muted">
+          Shows one photo you pick, with its original credit, as the daily background everywhere,
+          and the nightly job stops fetching new ones. Off = a new photo each day again.
+        </p>
+        {s.useDefaultPhoto && (
+          <>
+            {needsPhoto && (
+              <p role="alert" className="text-xs font-semibold text-red-600">
+                Pick a photo to save with this on.
+              </p>
+            )}
+            <DefaultPhotoPicker
+              value={s.defaultBackgroundId}
+              onChange={(id) => patch({ defaultBackgroundId: id })}
+              disabled={busy}
+            />
+          </>
+        )}
+      </div>
 
       <label className="flex items-center gap-2 text-sm text-ink">
         <input
@@ -1067,7 +1106,7 @@ function BackgroundSearchPanel() {
         )}
       </div>
 
-      <button onClick={save} disabled={busy} className="btn-primary w-full disabled:opacity-60">
+      <button onClick={save} disabled={busy || needsPhoto} className="btn-primary w-full disabled:opacity-60">
         {saving ? (
           'Saving…'
         ) : loading ? (

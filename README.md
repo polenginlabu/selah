@@ -387,12 +387,21 @@ card falls back to yesterday's image, and failing that to a gradient drawn from
 SELAH's own palette. The Bible reader never breaks over a missing picture, and
 the card is always shareable.
 
+**Default photo.** Admin → Background search → *Use default photo* picks one
+existing background to show every day instead of the day's own image — on the
+Home card, in the devotion reader and pre-selected on the verse card — with its
+original credit. The app reads it through `get_default_background()`, since the
+settings table is admin-only. While it is on, the nightly fetch skips the stock
+search (`--force` still fetches). Deleting the picked row, or turning the option
+off, brings back the per-day images on the next load.
+
 ### Setup
 
 **1. Database**
 
 ```bash
 supabase db push    # applies 20260919b_daily_backgrounds.sql and 20261005_daily_background_attribution.sql
+                    # and, for the admin settings, 20261015 and 20261016_background_default_photo.sql
 ```
 
 The fetch script stops before downloading anything if the `attribution` column

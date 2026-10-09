@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { BibleReaderSheet } from './BibleReaderSheet'
 import { useToast } from '../context/ToastContext'
-import { listBackgrounds } from '../data/dailyBackgrounds'
+import { getDefaultBackground, listBackgrounds } from '../data/dailyBackgrounds'
+import { resolveBackground } from '../lib/defaultBackground'
 import { DownloadIcon, ShareIcon } from '../icons'
 import { CARD_WIDTH, CARD_HEIGHT, MARGIN_X, layoutCard, quoteVerse } from '../lib/verseCardLayout'
 import { photoCredit } from '../lib/photoCredit'
@@ -188,17 +189,21 @@ export function VerseCardSheet({ selection, translation, onClose }) {
     return img
   }, [])
 
-  // Load every generated background once. The newest is pre-selected so the
-  // card starts the way it did before; the user can then switch to any other
+  // Load every generated background once. The admin's default photo (when on)
+  // or else the newest is pre-selected; the user can then switch to any other
   // image. A failed fetch keeps today's behaviour: the gradient.
   useEffect(() => {
     let cancelled = false
 
     ;(async () => {
-      const list = await listBackgrounds({ limit: 100 }).catch(() => [])
+      const [list, defaultPhoto] = await Promise.all([
+        listBackgrounds({ limit: 100 }).catch(() => []),
+        getDefaultBackground().catch(() => null),
+      ])
       if (cancelled) return
       setBackgrounds(list)
-      setSelectedBackground((current) => current ?? list[0] ?? null)
+      const preferred = resolveBackground(defaultPhoto, list[0])
+      setSelectedBackground((current) => current ?? list.find((bg) => bg.id === preferred?.id) ?? preferred)
       setBgResolved(true)
     })()
 

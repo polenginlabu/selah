@@ -4,8 +4,10 @@ import { getLatestBackground } from '../data/dailyBackgrounds'
 /**
  * The day's background photo for the devotional card and reader, or null.
  *
- * Uses the most recent background on or before `date`, so one failed night
- * shows yesterday's art rather than none. The image is preloaded before it is
+ * Uses the admin's default photo when that option is on, otherwise the most
+ * recent background on or before `date`, so one failed night shows
+ * yesterday's art rather than none. Nothing is cached across mounts, so a
+ * settings change shows on the next load. The image is preloaded before it is
  * returned: a background is only handed back once its bytes have arrived, so
  * callers can fade it in over their gradient fallback, and a broken URL never
  * reaches the page as a broken image — it simply leaves the fallback in place.
