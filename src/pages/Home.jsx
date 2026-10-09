@@ -15,7 +15,7 @@ import { getLevelProgress, getTribeForLevel } from '../lib/gamification'
 import { CheckIcon, ChevronDownIcon, PlusIcon, SearchIcon, SunIcon, XIcon, BookIcon, SproutIcon, BellIcon } from '../icons'
 import { TRIBE_ICONS } from '../tribeIcons'
 import { PrayerHomeEntry } from '../components/PrayerHomeEntry'
-import { GoldDust } from '../components/GoldDust'
+import { SeasonalAmbient } from '../components/SeasonalAmbient'
 import { StoryBackdrop } from '../components/StoryBackdrop'
 import { photoCredit } from '../lib/photoCredit'
 import { useDailyBackground } from '../lib/useDailyBackground'
@@ -346,7 +346,7 @@ function DailyDevotionCard({ devotion, doneToday }) {
         aria-hidden="true"
       />
       <div className="pointer-events-none absolute inset-0" aria-hidden="true">
-        <GoldDust />
+        <SeasonalAmbient />
       </div>
 
       <div className="relative p-5 pt-6">

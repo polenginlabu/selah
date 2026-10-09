@@ -51,6 +51,14 @@ import {
   saveBackgroundSearchSettings,
   previewBackgroundSearch,
 } from '../data/backgroundSearch'
+import { AmbientEffect } from '../components/AmbientEffect'
+import { getAmbientSettingsAdmin, saveAmbientSettings } from '../data/ambientSettings'
+import {
+  DEFAULT_AMBIENT_SETTINGS,
+  EFFECTS,
+  EFFECT_LABELS,
+  resolveEffect,
+} from '../lib/ambientEffects'
 import {
   resizeImageToWebp,
   uploadVerseBackground,
@@ -1121,6 +1129,183 @@ function BackgroundSearchPanel() {
   )
 }
 
+const AMBIENT_MODE_OPTIONS = [
+  ['auto', 'Auto by season'],
+  ['fixed', 'Fixed effect'],
+  ['off', 'Off'],
+]
+
+function ChipGroup({ label, options, value, onChange, disabled }) {
+  return (
+    <div className="space-y-1.5">
+      <p className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</p>
+      <div role="group" aria-label={label} className="flex flex-wrap gap-1.5">
+        {options.map(([v, text]) => (
+          <button
+            key={v}
+            type="button"
+            onClick={() => onChange(v)}
+            disabled={disabled}
+            aria-pressed={value === v}
+            className={`chip transition-colors ${value === v ? '!bg-brand !text-white' : 'hover:text-ink'}`}
+          >
+            {text}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function AmbientPanel() {
+  const toast = useToast()
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [s, setS] = useState(DEFAULT_AMBIENT_SETTINGS)
+  // The one tile that animates; the rest are still frames, so the page never
+  // runs six animation loops at once.
+  const [previewing, setPreviewing] = useState(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setLoadError(null)
+    try {
+      setS(await getAmbientSettingsAdmin())
+    } catch (err) {
+      console.error('Failed to load ambient settings:', err)
+      setLoadError(err.message ?? 'Could not load settings.')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  const patch = (p) => setS((cur) => ({ ...cur, ...p }))
+  const busy = loading || saving || Boolean(loadError)
+  const shown = resolveEffect(s, new Date())
+  const live = previewing ?? shown
+
+  const save = async () => {
+    if (busy) return
+    setSaving(true)
+    try {
+      const saved = await saveAmbientSettings(s)
+      setS(saved)
+      toast.success(
+        saved.mode === 'off'
+          ? 'Saved — no ambient animation.'
+          : `Saved — ${EFFECT_LABELS[resolveEffect(saved, new Date())].toLowerCase()} today${saved.mode === 'auto' ? ', changing with the season' : ''}.`
+      )
+    } catch (err) {
+      console.error('Failed to save ambient settings:', err)
+      toast.error(err.message ?? 'Could not save settings.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className="card space-y-4">
+      <div>
+        <p className="eyebrow">Ambient animation</p>
+        <p className="mt-0.5 text-sm text-muted">
+          The quiet layer behind the daily devotion card and reader. Auto follows the season
+          (Dec–Feb snow, Mar–May petals, Jun–Aug fireflies, Sep–Nov leaves in the north); readers
+          who prefer reduced motion see a still frame.
+        </p>
+      </div>
+
+      {loadError && (
+        <div className="rounded-xl border border-red-300 p-3 text-sm text-red-600">
+          {loadError}{' '}
+          <button type="button" onClick={load} className="underline">
+            Retry
+          </button>
+        </div>
+      )}
+
+      <ChipGroup label="Mode" options={AMBIENT_MODE_OPTIONS} value={s.mode} onChange={(mode) => patch({ mode })} disabled={busy} />
+
+      {s.mode === 'auto' && (
+        <ChipGroup
+          label="Seasons of"
+          options={[
+            ['north', 'Northern hemisphere'],
+            ['south', 'Southern hemisphere'],
+          ]}
+          value={s.hemisphere}
+          onChange={(hemisphere) => patch({ hemisphere })}
+          disabled={busy}
+        />
+      )}
+
+      <div className="space-y-1.5">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+          {s.mode === 'fixed' ? 'Effect' : 'Preview'}
+        </p>
+        <div role="group" aria-label="Effects" className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {EFFECTS.map((e) => {
+            const selected = s.mode === 'fixed' && s.effect === e
+            return (
+              <button
+                key={e}
+                type="button"
+                onClick={() => {
+                  setPreviewing(e)
+                  if (s.mode === 'fixed') patch({ effect: e })
+                }}
+                disabled={loading}
+                aria-pressed={s.mode === 'fixed' ? selected : undefined}
+                className={`overflow-hidden rounded-xl border text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand ${
+                  selected ? 'border-brand ring-1 ring-brand' : 'border-line hover:border-muted'
+                }`}
+              >
+                <span
+                  className="relative block h-24"
+                  style={{ background: 'linear-gradient(160deg, #1f2b4d 0%, #0f1730 100%)' }}
+                >
+                  <AmbientEffect effect={e} intensity={s.intensity} live={live === e} />
+                </span>
+                <span className="flex items-center justify-between px-2.5 py-1.5 text-xs text-ink">
+                  {EFFECT_LABELS[e]}
+                  {shown === e && <span className="text-muted">Today</span>}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      <ChipGroup
+        label="Intensity"
+        options={[
+          ['subtle', 'Subtle'],
+          ['normal', 'Normal'],
+        ]}
+        value={s.intensity}
+        onChange={(intensity) => patch({ intensity })}
+        disabled={busy || s.mode === 'off'}
+      />
+
+      <button onClick={save} disabled={busy} className="btn-primary w-full disabled:opacity-60">
+        {saving ? (
+          'Saving…'
+        ) : loading ? (
+          'Loading…'
+        ) : (
+          <>
+            <CheckIcon width={14} height={14} /> Save ambient animation
+          </>
+        )}
+      </button>
+    </section>
+  )
+}
+
 function BackgroundUploadPanel() {
   const toast = useToast()
   const [date, setDate] = useState(todayISO())
@@ -1458,6 +1643,8 @@ export default function Admin() {
       <DevotionSettingsPanel />
 
       <BackgroundSearchPanel />
+
+      <AmbientPanel />
 
       <BackgroundUploadPanel />
 

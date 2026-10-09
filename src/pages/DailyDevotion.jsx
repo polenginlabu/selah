@@ -8,7 +8,7 @@ import { todayISO } from '../lib/date'
 import { buildStorySections, nextSectionIndex } from '../lib/devotionStory'
 import { photoCredit, photoCreditHref } from '../lib/photoCredit'
 import { useDailyBackground } from '../lib/useDailyBackground'
-import { GoldDust } from '../components/GoldDust'
+import { SeasonalAmbient } from '../components/SeasonalAmbient'
 import { StoryBackdrop } from '../components/StoryBackdrop'
 import { ChevronDownIcon, ChevronLeftIcon, ShareIcon, CheckIcon } from '../icons'
 import heroImage from '../assets/devotion-hero.jpg'
@@ -593,7 +593,7 @@ function DevotionStory({ devotion, date, background, reading, onBack, onShare })
         aria-hidden="true"
       />
       <div className="pointer-events-none absolute inset-0" aria-hidden="true">
-        <GoldDust />
+        <SeasonalAmbient />
       </div>
 
       <div
