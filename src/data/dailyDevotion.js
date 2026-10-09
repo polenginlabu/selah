@@ -148,7 +148,7 @@ export async function saveDevotionSettings({ theme = null, translation = 'NIV', 
   if (error) throw error
 }
 
-async function readFunctionError(error) {
+export async function readFunctionError(error, fn = 'trigger-devotion') {
   const response = error?.context
   // No Response at all means the browser blocked it before any body existed —
   // a network failure, or a CORS block. The most common cause by far is the
@@ -156,7 +156,7 @@ async function readFunctionError(error) {
   // which carries no CORS headers, so the browser reports a CORS error and
   // hides the real one. Say that plainly instead of "could not start".
   if (!(response instanceof Response)) {
-    return 'Could not reach the trigger-devotion function. If this is the first run, deploy it: supabase functions deploy trigger-devotion'
+    return `Could not reach the ${fn} function. If this is the first run, deploy it: supabase functions deploy ${fn}`
   }
   const status = `HTTP ${response.status}`
   let raw = ''

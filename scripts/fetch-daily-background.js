@@ -11,6 +11,10 @@
 // Search: Pixabay when PIXABAY_API_KEY is set, Openverse (no key, CC0 and
 // Public Domain Mark only) otherwise or when Pixabay fails. Keywords come from
 // the day's devotion row — see buildImageQueries() in selah/stockBackground.js.
+// The admin's background_search_settings row (Admin → Background search) can
+// put its own phrases first or instead, add deny words, and change the style
+// word, image type and providers. A missing, disabled or unreadable row means
+// the defaults.
 //
 // Idempotent by date: an existing row means nothing to do, and no provider is
 // contacted. --force replaces the row and the image.
@@ -42,6 +46,9 @@ import {
   buildImageQueries, findBackground, downloadImage, buildAttribution, creditLine,
   minShortSide, NO_REPEAT_DAYS,
 } from './selah/stockBackground.js'
+import {
+  activeSettings, mergeQueries, providerParams,
+} from '../supabase/functions/_shared/backgroundSearch.js'
 
 /** How many ranked candidates to try before giving up on downloads. */
 const MAX_DOWNLOAD_ATTEMPTS = 3
@@ -117,7 +124,21 @@ async function main() {
   // --- What to search for ---------------------------------------------------
   let devotion = null
   let recentIds = []
+  let settings = null
   if (admin) {
+    // The admin's search settings are optional: any failure means the defaults.
+    try {
+      const res = await admin.from('background_search_settings').select('*').eq('id', true).maybeSingle()
+      if (res.error) log(`background search settings: using defaults (${res.error.message})`)
+      else if (!res.data) log('background search settings: using defaults (no settings row)')
+      else {
+        settings = activeSettings(res.data)
+        if (!settings) log('background search settings: using defaults (disabled)')
+      }
+    } catch (err) {
+      log(`background search settings: using defaults (${err.message})`)
+    }
+
     const dev = await admin
       .from('daily_devotions')
       .select('title, topic_label, theme, theme_label, key_scripture, key_scripture_text, thought')
@@ -153,15 +174,28 @@ async function main() {
   }
   if (args.theme) devotion = { ...(devotion ?? {}), theme: args.theme, themeLabel: null }
 
-  const queries = buildImageQueries(devotion, date)
+  const queries = mergeQueries(settings, buildImageQueries(devotion, date))
+  const params = providerParams(settings)
   const theme = devotion?.themeLabel || devotion?.theme || themeForDate(date).theme
   log(`theme: ${theme}`)
+  if (settings) {
+    log(`admin settings: ${settings.phrases.length} phrase(s), mode "${settings.mode}", ` +
+      `style "${settings.styleTerm}", image type ${settings.imageType}, ${settings.denyWords.length} extra deny word(s)`)
+  }
   log(`queries: ${queries.map((q) => `"${q}"`).join(', ')}`)
-  log(`provider: ${env.PIXABAY_API_KEY ? 'pixabay, then openverse' : 'openverse (no PIXABAY_API_KEY)'}`)
+  const usePixabay = Boolean(env.PIXABAY_API_KEY) && params.usePixabay
+  log(`provider: ${usePixabay
+    ? (params.useOpenverse ? 'pixabay, then openverse' : 'pixabay')
+    : `openverse (${env.PIXABAY_API_KEY ? 'pixabay off in settings' : 'no PIXABAY_API_KEY'})`}`)
 
   // --- Find and download ----------------------------------------------------
   const found = await findBackground({
     queries, dateISO: date, recentIds, pixabayApiKey: env.PIXABAY_API_KEY || null, log,
+    ...(settings ? { styleTerm: settings.styleTerm, extraDeny: settings.denyWords } : {}),
+    pixabayImageType: params.pixabayImageType,
+    openverseCategory: params.openverseCategory,
+    usePixabay: params.usePixabay,
+    useOpenverse: params.useOpenverse,
   })
   if (!found) throw new Error('No freely-licensed photo matched any query.')
 

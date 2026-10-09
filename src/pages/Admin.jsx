@@ -36,6 +36,20 @@ import {
 import { THEMES } from '../../scripts/selah/themes.js'
 import { getBackgroundForDate, listBackgrounds } from '../data/dailyBackgrounds'
 import { themeForDate } from '../../scripts/selah/background.js'
+import { THEME_QUERIES, GENERIC_QUERY } from '../../scripts/selah/stockBackground.js'
+import {
+  MAX_PHRASES,
+  MAX_PHRASE_LEN,
+  MAX_DENY_WORDS,
+  cleanPhrase,
+  cleanDenyWord,
+  normalizeSettings,
+} from '../../supabase/functions/_shared/backgroundSearch.js'
+import {
+  getBackgroundSearchSettings,
+  saveBackgroundSearchSettings,
+  previewBackgroundSearch,
+} from '../data/backgroundSearch'
 import {
   resizeImageToWebp,
   uploadVerseBackground,
@@ -649,6 +663,425 @@ function DevotionSettingsPanel() {
   )
 }
 
+const IMAGE_TYPE_OPTIONS = [
+  ['illustration', 'Illustrations'],
+  ['photo', 'Photos'],
+  ['all', 'Both'],
+]
+
+/**
+ * What the nightly stock-image search looks for. Admin phrases go first (or
+ * replace the built-in ones), deny words are added to the built-in list, and
+ * the preview shows sample results without saving anything.
+ */
+function BackgroundSearchPanel() {
+  const toast = useToast()
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [s, setS] = useState(() => normalizeSettings(null))
+  const [newPhrase, setNewPhrase] = useState('')
+  const [newDeny, setNewDeny] = useState('')
+  const [showDefaults, setShowDefaults] = useState(false)
+  const [preview, setPreview] = useState(null) // { phrase, loading, data, error }
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setLoadError(null)
+    try {
+      setS(await getBackgroundSearchSettings())
+    } catch (err) {
+      console.error('Failed to load background search settings:', err)
+      setLoadError(err.message ?? 'Could not load settings.')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  const patch = (p) => setS((cur) => ({ ...cur, ...p }))
+  const busy = loading || saving || Boolean(loadError)
+
+  const addPhrase = () => {
+    const p = cleanPhrase(newPhrase)
+    if (!p) {
+      toast.error(`Use 1–${MAX_PHRASE_LEN} letters, digits, spaces, apostrophes or hyphens.`)
+      return
+    }
+    if (s.phrases.includes(p)) return setNewPhrase('')
+    if (s.phrases.length >= MAX_PHRASES) {
+      toast.error(`At most ${MAX_PHRASES} phrases.`)
+      return
+    }
+    patch({ phrases: [...s.phrases, p] })
+    setNewPhrase('')
+  }
+
+  const movePhrase = (i, by) => {
+    const j = i + by
+    if (j < 0 || j >= s.phrases.length) return
+    const next = [...s.phrases]
+    ;[next[i], next[j]] = [next[j], next[i]]
+    patch({ phrases: next })
+  }
+
+  const addDeny = () => {
+    const w = cleanDenyWord(newDeny)
+    if (!w) {
+      toast.error('A deny word is one word of letters (an apostrophe is fine).')
+      return
+    }
+    if (s.denyWords.includes(w)) return setNewDeny('')
+    if (s.denyWords.length >= MAX_DENY_WORDS) {
+      toast.error(`At most ${MAX_DENY_WORDS} deny words.`)
+      return
+    }
+    patch({ denyWords: [...s.denyWords, w] })
+    setNewDeny('')
+  }
+
+  const save = async () => {
+    if (busy) return
+    setSaving(true)
+    try {
+      setS(await saveBackgroundSearchSettings(s))
+      toast.success(
+        !s.enabled
+          ? 'Saved — the nightly search uses its defaults.'
+          : s.phrases.length
+            ? `Saved — ${s.phrases.length} phrase${s.phrases.length === 1 ? '' : 's'} ${s.mode === 'only' ? 'only' : 'first'}.`
+            : 'Saved — no phrases, so the built-in ones are used.'
+      )
+    } catch (err) {
+      console.error('Failed to save background search settings:', err)
+      toast.error(err.message ?? 'Could not save settings.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const runPreview = async (phrase) => {
+    setPreview({ phrase, loading: true, data: null, error: null })
+    try {
+      const data = await previewBackgroundSearch(phrase, { styleTerm: s.styleTerm, imageType: s.imageType })
+      setPreview({ phrase, loading: false, data, error: null })
+    } catch (err) {
+      setPreview({ phrase, loading: false, data: null, error: err.message ?? 'Preview failed.' })
+    }
+  }
+
+  return (
+    <section className="card space-y-4">
+      <div>
+        <p className="eyebrow">Background search</p>
+        <p className="mt-0.5 text-sm text-muted">
+          What the nightly job searches Pixabay and Openverse for. Your phrases are tried before
+          (or instead of) the built-in ones; the licence check and the built-in deny list always apply.
+        </p>
+      </div>
+
+      {loadError && (
+        <div className="rounded-xl border border-red-300 p-3 text-sm text-red-600">
+          {loadError}{' '}
+          <button type="button" onClick={load} className="underline">
+            Retry
+          </button>
+        </div>
+      )}
+
+      <label className="flex items-center gap-2 text-sm text-ink">
+        <input
+          type="checkbox"
+          checked={s.enabled}
+          onChange={(e) => patch({ enabled: e.target.checked })}
+          disabled={busy}
+        />
+        Use these settings (off = built-in search only)
+      </label>
+
+      {/* Phrases */}
+      <div className="space-y-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted">Search phrases</p>
+        {s.phrases.length === 0 ? (
+          <p className="text-xs italic text-muted">No phrases — the built-in ones are used.</p>
+        ) : (
+          <ol className="space-y-1.5">
+            {s.phrases.map((p, i) => (
+              <li key={p} className="flex items-center gap-2">
+                <span className="w-5 text-right text-xs text-muted">{i + 1}.</span>
+                <span className="min-w-0 flex-1 truncate text-sm text-ink">{p}</span>
+                <button
+                  type="button"
+                  onClick={() => runPreview(p)}
+                  disabled={preview?.loading}
+                  className="chip transition-colors hover:text-ink disabled:opacity-40"
+                >
+                  <SearchIcon width={10} height={10} /> Preview
+                </button>
+                <button
+                  type="button"
+                  onClick={() => movePhrase(i, -1)}
+                  disabled={busy || i === 0}
+                  aria-label={`Move “${p}” up`}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-canvas text-muted transition-colors hover:text-ink disabled:opacity-40"
+                >
+                  <ChevronDownIcon width={13} height={13} className="rotate-180" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => movePhrase(i, 1)}
+                  disabled={busy || i === s.phrases.length - 1}
+                  aria-label={`Move “${p}” down`}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-canvas text-muted transition-colors hover:text-ink disabled:opacity-40"
+                >
+                  <ChevronDownIcon width={13} height={13} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => patch({ phrases: s.phrases.filter((x) => x !== p) })}
+                  disabled={busy}
+                  aria-label={`Remove “${p}”`}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-canvas text-muted transition-colors hover:text-red-500 disabled:opacity-40"
+                >
+                  <TrashIcon width={13} height={13} />
+                </button>
+              </li>
+            ))}
+          </ol>
+        )}
+        <div className="flex items-center gap-2">
+          <input
+            value={newPhrase}
+            onChange={(e) => setNewPhrase(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addPhrase())}
+            disabled={busy}
+            maxLength={MAX_PHRASE_LEN}
+            placeholder="e.g. misty lake dawn"
+            aria-label="New search phrase"
+            className="input min-w-0 flex-1"
+          />
+          <button type="button" onClick={addPhrase} disabled={busy || !newPhrase.trim()} className="btn-outline px-3 py-1.5 text-sm">
+            <PlusIcon width={14} height={14} /> Add
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const p = cleanPhrase(newPhrase)
+              if (p) runPreview(p)
+              else toast.error(`Use 1–${MAX_PHRASE_LEN} letters, digits, spaces, apostrophes or hyphens.`)
+            }}
+            disabled={!newPhrase.trim() || preview?.loading}
+            className="btn-outline px-3 py-1.5 text-sm"
+          >
+            <SearchIcon width={14} height={14} /> Preview
+          </button>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {[
+            ['first', 'Use my phrases first'],
+            ['only', 'Only my phrases'],
+          ].map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => patch({ mode: value })}
+              disabled={busy}
+              aria-pressed={s.mode === value}
+              className={`chip transition-colors ${s.mode === value ? '!bg-brand !text-white' : 'hover:text-ink'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Preview */}
+      {preview && (
+        <div className="space-y-2 rounded-xl border border-line p-3">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Preview: “{preview.data?.query ?? preview.phrase}”
+              {preview.data && ` · ${preview.data.provider}`}
+            </p>
+            <button type="button" onClick={() => setPreview(null)} aria-label="Close preview" className="text-muted hover:text-ink">
+              <XIcon width={12} height={12} />
+            </button>
+          </div>
+          {preview.loading && <p className="text-sm text-muted">Searching…</p>}
+          {preview.error && <p className="text-sm text-red-600">{preview.error}</p>}
+          {preview.data?.note && <p className="text-xs text-muted">{preview.data.note}</p>}
+          {preview.data && preview.data.results.length === 0 && (
+            <p className="text-sm italic text-muted">No results for this phrase.</p>
+          )}
+          {preview.data?.results.length > 0 && (
+            <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {preview.data.results.map((r) => (
+                <li key={r.id} className={`space-y-1 text-xs ${r.rejected ? 'opacity-60' : ''}`}>
+                  {r.thumbUrl ? (
+                    <img src={r.thumbUrl} alt={r.tags} loading="lazy" className="aspect-[9/16] w-full rounded-lg bg-canvas object-cover" />
+                  ) : (
+                    <div className="aspect-[9/16] w-full rounded-lg bg-canvas" />
+                  )}
+                  {r.rejected && <p className="font-semibold text-red-600">Would be rejected: {r.rejected}</p>}
+                  <p className="line-clamp-2 text-muted">{r.tags || '—'}</p>
+                  <p className="text-muted">
+                    {r.licenseUrl ? (
+                      <a href={r.licenseUrl} target="_blank" rel="noopener noreferrer" className="underline">
+                        {r.license}
+                      </a>
+                    ) : (
+                      r.license
+                    )}
+                    {r.sourceUrl && (
+                      <>
+                        {' · '}
+                        <a href={r.sourceUrl} target="_blank" rel="noopener noreferrer" className="underline">
+                          source
+                        </a>
+                      </>
+                    )}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {/* Style and image type */}
+      <div className="space-y-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted">Style word</p>
+        <input
+          value={s.styleTerm}
+          onChange={(e) => patch({ styleTerm: e.target.value })}
+          disabled={busy}
+          maxLength={30}
+          placeholder="blank = no style word"
+          aria-label="Style word"
+          className="input"
+        />
+        <p className="text-xs text-muted">Each phrase is tried with this word first, then without it.</p>
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted">Image type</p>
+        <div className="flex flex-wrap gap-1.5">
+          {IMAGE_TYPE_OPTIONS.map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => patch({ imageType: value })}
+              disabled={busy}
+              aria-pressed={s.imageType === value}
+              className={`chip transition-colors ${s.imageType === value ? '!bg-brand !text-white' : 'hover:text-ink'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-4 text-sm text-ink">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={s.usePixabay}
+              onChange={(e) => patch({ usePixabay: e.target.checked, useOpenverse: e.target.checked ? s.useOpenverse : true })}
+              disabled={busy}
+            />
+            Pixabay
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={s.useOpenverse}
+              onChange={(e) => patch({ useOpenverse: e.target.checked, usePixabay: e.target.checked ? s.usePixabay : true })}
+              disabled={busy}
+            />
+            Openverse
+          </label>
+        </div>
+      </div>
+
+      {/* Deny words */}
+      <div className="space-y-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted">Extra deny words</p>
+        <p className="text-xs text-muted">
+          Results tagged with these are skipped, on top of the built-in list (people, lettering, other faiths).
+        </p>
+        <div className="flex flex-wrap gap-1.5">
+          {s.denyWords.length === 0 && <span className="text-xs italic text-muted">None.</span>}
+          {s.denyWords.map((w) => (
+            <button
+              key={w}
+              type="button"
+              onClick={() => patch({ denyWords: s.denyWords.filter((x) => x !== w) })}
+              disabled={busy}
+              aria-label={`Remove deny word ${w}`}
+              className="chip transition-colors hover:text-red-500"
+            >
+              {w} <XIcon width={10} height={10} />
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            value={newDeny}
+            onChange={(e) => setNewDeny(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addDeny())}
+            disabled={busy}
+            maxLength={30}
+            placeholder="e.g. car"
+            aria-label="New deny word"
+            className="input min-w-0 flex-1"
+          />
+          <button type="button" onClick={addDeny} disabled={busy || !newDeny.trim()} className="btn-outline px-3 py-1.5 text-sm">
+            <PlusIcon width={14} height={14} /> Add
+          </button>
+        </div>
+      </div>
+
+      {/* Built-in phrases, for reference */}
+      <div className="rounded-xl border border-line p-3">
+        <button
+          type="button"
+          onClick={() => setShowDefaults((v) => !v)}
+          aria-expanded={showDefaults}
+          className="flex w-full items-center justify-between text-xs font-semibold uppercase tracking-wide text-muted"
+        >
+          Built-in theme phrases
+          <ChevronDownIcon width={13} height={13} className={showDefaults ? 'rotate-180' : ''} />
+        </button>
+        {showDefaults && (
+          <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+            {Object.entries(THEME_QUERIES).map(([theme, phrase]) => (
+              <div key={theme} className="contents">
+                <dt className="capitalize text-muted">{theme}</dt>
+                <dd className="text-ink">{phrase}</dd>
+              </div>
+            ))}
+            <dt className="text-muted">fallback</dt>
+            <dd className="text-ink">{GENERIC_QUERY}</dd>
+          </dl>
+        )}
+      </div>
+
+      <button onClick={save} disabled={busy} className="btn-primary w-full disabled:opacity-60">
+        {saving ? (
+          'Saving…'
+        ) : loading ? (
+          'Loading…'
+        ) : (
+          <>
+            <CheckIcon width={14} height={14} /> Save search settings
+          </>
+        )}
+      </button>
+    </section>
+  )
+}
+
 function BackgroundUploadPanel() {
   const toast = useToast()
   const [date, setDate] = useState(todayISO())
@@ -984,6 +1417,8 @@ export default function Admin() {
       <DevotionPanel />
 
       <DevotionSettingsPanel />
+
+      <BackgroundSearchPanel />
 
       <BackgroundUploadPanel />
 

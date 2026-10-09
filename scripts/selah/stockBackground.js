@@ -4,7 +4,10 @@
 //
 // The look is a minimalist atmospheric landscape illustration — layered hills,
 // haze, calm sea, soft light — so both providers are asked for illustrations,
-// not photographs, and every query is tried with a style word first.
+// not photographs, and every query is tried with a style word first. An admin
+// can add phrases and deny words and change the style word and image type
+// (background_search_settings, see supabase/functions/_shared/backgroundSearch.js);
+// without settings, the defaults below apply.
 //
 // No filesystem and no Supabase. The only network access is through an
 // injected `fetchImpl`, so every path — including provider failure and the
@@ -17,6 +20,7 @@
 // Never widen ALLOWED_LICENSES without solving that first.
 
 import { assertValidDate, dayIndex, themeForDate, IMAGE_WIDTH, IMAGE_HEIGHT } from './background.js'
+import { DENY_WORDS, mergeDenyWords } from '../../supabase/functions/_shared/backgroundSearch.js'
 
 export const PIXABAY_SEARCH_URL = 'https://pixabay.com/api/'
 export const OPENVERSE_SEARCH_URL = 'https://api.openverse.org/v1/images/'
@@ -109,29 +113,16 @@ export const NATURE_VOCAB = {
   path: 'path', road: 'path', rock: 'rocks', spring: 'spring',
 }
 
-/**
- * Words that disqualify a result when they appear in its title, alt text or
- * tags: people and faces, anything with lettering, and other faiths' imagery.
- * Matched as whole words, so "manor" does not trip "man".
- */
-export const DENY_WORDS = [
-  // people
-  'person', 'people', 'man', 'men', 'woman', 'women', 'boy', 'boys', 'girl', 'girls',
-  'child', 'children', 'kid', 'kids', 'baby', 'face', 'faces', 'portrait', 'selfie',
-  'crowd', 'couple', 'family', 'hand', 'hands', 'model', 'bride', 'groom', 'wedding',
-  'human', 'tourist', 'hiker', 'silhouette', 'nude',
-  // lettering
-  'text', 'sign', 'signage', 'logo', 'letter', 'letters', 'word', 'words',
-  'typography', 'quote', 'poster', 'book', 'bible', 'newspaper', 'graffiti',
-  'banner', 'watermark', 'menu', 'label',
-  // other faiths and the occult
-  'buddha', 'buddhist', 'buddhism', 'temple', 'mosque', 'hindu', 'hinduism', 'shrine',
-  'pagoda', 'idol', 'deity', 'ganesh', 'shiva', 'torii', 'islam', 'islamic', 'allah',
-  'zen', 'mandala', 'yoga', 'monk', 'stupa', 'tarot', 'occult', 'witch', 'pagan',
-  'halloween', 'skull',
-]
+// DENY_WORDS lives in the shared module so the background-preview Edge
+// Function flags exactly what this job would skip.
+export { DENY_WORDS }
 
 const DENY_SET = new Set(DENY_WORDS)
+
+/** The deny list as a Set, with the admin's extra words added (never removed). */
+export function denySet(extraDeny = []) {
+  return extraDeny?.length ? new Set(mergeDenyWords(DENY_WORDS, extraDeny)) : DENY_SET
+}
 
 function words(text) {
   return String(text ?? '').toLowerCase().match(/[a-z']+/g) ?? []
@@ -195,17 +186,20 @@ export function buildImageQuery(devotion, dateISO) {
 }
 
 /**
- * Each query with STYLE_TERM added, then the query itself, in the given order
- * and without duplicates. A query that already has the style word is kept as
- * it is.
+ * Each query with the style term added, then the query itself, in the given
+ * order and without duplicates. A query that already has the style term is
+ * kept as it is; a blank style term means plain queries only.
  *
  * @param {string[]} queries
+ * @param {string} [styleTerm]
  * @returns {string[]}
  */
-export function styleQueries(queries) {
+export function styleQueries(queries, styleTerm = STYLE_TERM) {
+  if (!styleTerm) return [...new Set(queries)]
   const out = []
   for (const q of queries) {
-    const styled = words(q).includes(STYLE_TERM) ? q : `${q} ${STYLE_TERM}`
+    const has = ` ${words(q).join(' ')} `.includes(` ${words(styleTerm).join(' ')} `)
+    const styled = has ? q : `${q} ${styleTerm}`
     for (const v of [styled, q]) if (!out.includes(v)) out.push(v)
   }
   return out
@@ -270,8 +264,8 @@ function isHttps(url) {
 }
 
 /** The first deny-listed word in a candidate's description, or null. */
-export function deniedWord(text) {
-  return words(text).find((w) => DENY_SET.has(w)) ?? null
+export function deniedWord(text, deny = DENY_SET) {
+  return words(text).find((w) => deny.has(w)) ?? null
 }
 
 /** Short side in pixels must cover the card's width without upscaling. */
@@ -295,18 +289,18 @@ export function minShortSide(provider) {
  * Why a candidate is unusable, or null if it is fine. Dimensions the provider
  * did not report are let through here and checked on the downloaded bytes.
  */
-export function rejectionReason(c) {
+export function rejectionReason(c, { deny = DENY_SET } = {}) {
   if (!c?.imageUrl || !isHttps(c.imageUrl)) return 'not https'
   if (!isAllowedLicense(c.provider, c.license)) return `licence ${c.license || 'unknown'}`
   if (c.mature) return 'mature'
-  const word = deniedWord(c.text)
+  const word = deniedWord(c.text, deny)
   if (word) return `mentions "${word}"`
   if (c.width && c.height && !isLargeEnough(c.width, c.height)) return 'too small'
   return null
 }
 
-export function isSuitableCandidate(c) {
-  return rejectionReason(c) === null
+export function isSuitableCandidate(c, options) {
+  return rejectionReason(c, options) === null
 }
 
 /**
@@ -317,11 +311,12 @@ export function isSuitableCandidate(c) {
  * rest follow in order, for when the first one fails to download.
  *
  * @param {string[]} recentIds sourceIds used in the last NO_REPEAT_DAYS days
+ * @param {{deny?: Set<string>}} [options] deny: the deny list (see denySet)
  */
-export function rankCandidates(candidates, dateISO, recentIds = []) {
+export function rankCandidates(candidates, dateISO, recentIds = [], options = {}) {
   const recent = new Set(recentIds)
   const usable = candidates
-    .filter((c) => isSuitableCandidate(c) && !recent.has(c.sourceId))
+    .filter((c) => isSuitableCandidate(c, options) && !recent.has(c.sourceId))
     .sort((a, b) => (a.sourceId < b.sourceId ? -1 : a.sourceId > b.sourceId ? 1 : 0))
   if (!usable.length) return []
   const start = ((dayIndex(dateISO) % usable.length) + usable.length) % usable.length
@@ -398,13 +393,15 @@ async function getJson(fetchImpl, url, headers, provider, timeoutMs, secret = nu
   }
 }
 
-export async function searchPixabay(query, { apiKey, fetchImpl = fetch, timeoutMs = 15000 } = {}) {
+export async function searchPixabay(query, {
+  apiKey, imageType = PIXABAY_IMAGE_TYPE, fetchImpl = fetch, timeoutMs = 15000,
+} = {}) {
   const url = new URL(PIXABAY_SEARCH_URL)
   // Pixabay takes the key only as a query parameter: never log this URL.
   url.search = new URLSearchParams({
     key: apiKey,
     q: String(query).slice(0, 100),
-    image_type: PIXABAY_IMAGE_TYPE,
+    image_type: imageType,
     orientation: 'vertical',
     safesearch: 'true',
     order: 'popular',
@@ -416,16 +413,21 @@ export async function searchPixabay(query, { apiKey, fetchImpl = fetch, timeoutM
   return normalizePixabay(json)
 }
 
-export async function searchOpenverse(query, { fetchImpl = fetch, timeoutMs = 15000 } = {}) {
+/** @param {{category?: string|null}} options category null: any kind of image */
+export async function searchOpenverse(query, {
+  category = OPENVERSE_CATEGORY, fetchImpl = fetch, timeoutMs = 15000,
+} = {}) {
   const url = new URL(OPENVERSE_SEARCH_URL)
-  url.search = new URLSearchParams({
+  const params = new URLSearchParams({
     q: query,
     license: ALLOWED_LICENSES.openverse.join(','),
-    category: OPENVERSE_CATEGORY,
+    category: category ?? '',
     size: 'large',
     mature: 'false',
     page_size: '20',
-  }).toString()
+  })
+  if (!category) params.delete('category')
+  url.search = params.toString()
   const json = await getJson(fetchImpl, url, { 'User-Agent': USER_AGENT }, 'openverse', timeoutMs)
   return normalizeOpenverse(json)
 }
@@ -438,17 +440,29 @@ export async function searchOpenverse(query, { fetchImpl = fetch, timeoutMs = 15
  * A provider that errors is skipped, not fatal — a dead Pixabay key must still
  * leave the keyless path working.
  *
+ * The optional settings come from the admin (see _shared/backgroundSearch.js);
+ * each defaults to the built-in behaviour. extraDeny only adds to DENY_WORDS.
+ *
  * @returns {Promise<{provider: string, query: string, ranked: object[]} | null>}
  */
 export async function findBackground({
   queries, dateISO, recentIds = [], pixabayApiKey = null, fetchImpl = fetch, log = () => {},
+  styleTerm = STYLE_TERM, extraDeny = [], pixabayImageType = PIXABAY_IMAGE_TYPE,
+  openverseCategory = OPENVERSE_CATEGORY, usePixabay = true, useOpenverse = true,
 }) {
   const providers = []
-  if (pixabayApiKey) providers.push(['pixabay', (q) => searchPixabay(q, { apiKey: pixabayApiKey, fetchImpl })])
-  providers.push(['openverse', (q) => searchOpenverse(q, { fetchImpl })])
+  if (pixabayApiKey && usePixabay) {
+    providers.push(['pixabay', (q) => searchPixabay(q, { apiKey: pixabayApiKey, imageType: pixabayImageType, fetchImpl })])
+  }
+  // Openverse is the keyless fallback: it stays on when Pixabay cannot run,
+  // even if the admin turned it off, so a setting never empties the search.
+  if (useOpenverse || !providers.length) {
+    providers.push(['openverse', (q) => searchOpenverse(q, { category: openverseCategory, fetchImpl })])
+  }
+  const deny = denySet(extraDeny)
 
   for (const [provider, search] of providers) {
-    for (const query of styleQueries(queries)) {
+    for (const query of styleQueries(queries, styleTerm)) {
       let candidates
       try {
         candidates = await search(query)
@@ -456,7 +470,7 @@ export async function findBackground({
         log(redact(`${err.message} — skipping ${provider}`, pixabayApiKey))
         break
       }
-      const ranked = rankCandidates(candidates, dateISO, recentIds)
+      const ranked = rankCandidates(candidates, dateISO, recentIds, { deny })
       log(`${provider} "${query}": ${candidates.length} results, ${ranked.length} usable`)
       if (ranked.length) return { provider, query, ranked }
     }
