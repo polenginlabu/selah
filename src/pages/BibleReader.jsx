@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAssistantPassage } from '../context/AssistantContext'
 import { useToast } from '../context/ToastContext'
 import { useAuth } from '../context/AuthContext'
-import { ChevronLeftIcon, ChevronRightIcon, ChevronDownIcon, SearchIcon, BookOpenIcon, BookmarkIcon, CheckIcon, DownloadIcon } from '../icons'
+import { ChevronLeftIcon, ChevronRightIcon, ChevronDownIcon, SearchIcon, BookOpenIcon, BookmarkIcon, CheckIcon, DownloadIcon, PlayIcon, PauseIcon } from '../icons'
 import { BIBLE_BOOKS, getBook } from '../data/books'
 import { API_BIBLES, AUDIO_TRANSLATIONS, PUBLIC_BIBLES, bibleRequest, getBibleChapter, trackBibleView } from '../data/bible'
 import { LEGACY_BIBLES, getLegacyChapter } from '../data/bibleLegacy'
@@ -21,6 +21,7 @@ import { savedVerses } from '../lib/savedVerses'
 import { toggleBookmark, isBookmarked, bookmarkLabel, resolveBookmarkTranslation, readBookmarkState, writeBookmarkState, stampBookmark, serverBookmarkState, mergeBookmark, shouldRefresh } from '../lib/bookmark'
 import { tapVerse, joinSelectedText } from '../lib/selection'
 import { swipeDirection } from '../lib/swipe'
+import { toolbarState } from '../lib/listenUi'
 import { useOfflineBibles } from '../lib/useOfflineBibles'
 
 const ALL_BIBLES = [...API_BIBLES, ...LEGACY_BIBLES, ...PUBLIC_BIBLES]
@@ -146,9 +147,12 @@ export default function BibleReader() {
   // Read-aloud: the verse being read (highlighted and followed), the requestKey
   // of the chapter whose player should start on its own (only the one "continue"
   // navigated to), and when the reader last scrolled by hand so following never
-  // fights them.
+  // fights them. The Listen sheet's open state and the player's status live
+  // here so they survive the player remounting on "Auto-play next".
   const [readingVerse, setReadingVerse] = useState(null)
   const [listenAutoStart, setListenAutoStart] = useState(null)
+  const [listenOpen, setListenOpen] = useState(false)
+  const [listenState, setListenState] = useState('idle')
   const manualScrollRef = useRef(0)
   const marked = isBookmarked(bookmark, position)
   const requestKey = `${book}:${chapter}:${translation}`
@@ -156,6 +160,14 @@ export default function BibleReader() {
   useEffect(() => {
     setListenAutoStart((key) => (key === requestKey ? key : null))
   }, [requestKey])
+  const hasAudio = AUDIO_TRANSLATIONS.includes(translation)
+  // No player for this translation (it unmounts, which stops the audio).
+  useEffect(() => {
+    if (hasAudio) return
+    setListenOpen(false)
+    setListenState('idle')
+  }, [hasAudio])
+  const listenButton = toolbarState(listenState, book, chapter)
   const current = chapterData?.requestKey === requestKey ? chapterData : null
   const version = ALL_BIBLES.find((b) => b.id === translation)
   const bookInfo = getBook(book)
@@ -618,6 +630,10 @@ export default function BibleReader() {
           <BookmarkIcon width={21} height={21} fill={marked ? 'currentColor' : 'none'} className={marked ? 'text-brand-strong dark:text-brand' : undefined} />
         </button>
         <button onClick={() => setSheet('search')} className="bible-icon-button" aria-label="Search the Bible"><SearchIcon width={21} height={21} /></button>
+        {/* Opens the player; the first play is the sheet's Play tap (iOS needs the gesture there). */}
+        {hasAudio && current && !loading && !error && <button onClick={() => setListenOpen(true)} className="bible-icon-button" aria-haspopup="dialog" aria-pressed={listenButton.playing} aria-label={listenButton.label}>
+          {listenButton.playing ? <PauseIcon width={21} height={21} /> : <PlayIcon width={21} height={21} />}
+        </button>}
       </div>
     </div>
 
@@ -650,8 +666,9 @@ export default function BibleReader() {
     </div>}
 
     {current && !loading && !error && <>
-      {AUDIO_TRANSLATIONS.includes(translation) && <ListenPlayer key={requestKey} translation={translation} book={book} chapter={chapter} verses={current.verses}
+      {hasAudio && <ListenPlayer key={requestKey} translation={translation} book={book} chapter={chapter} verses={current.verses}
         autoStart={listenAutoStart === requestKey} onAutoStarted={() => setListenAutoStart(null)} onActiveVerse={setReadingVerse} hideMini={Boolean(selection)}
+        sheetOpen={listenOpen} onSheetClose={() => setListenOpen(false)} onOpen={() => setListenOpen(true)} onStatus={setListenState}
         onNextChapter={lastChapter ? undefined : listenNextChapter} nextChapter={listenNextTarget()} />}
       <article ref={articleRef} aria-label={`${book} ${chapter}, ${version.name}`} tabIndex={-1} className={`bible-passage ${font === 'serif' ? 'font-serif' : 'font-sans'}`} style={{ fontSize: `${fontSize}px` }}
         onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} onTouchCancel={handleTouchCancel} onClickCapture={handleArticleClickCapture} onKeyDown={handlePassageKeyDown}>

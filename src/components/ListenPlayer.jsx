@@ -7,7 +7,9 @@ import { canSpeak, cancelSpeech, deviceVoices, pickEnglishVoice, speak, speechSe
 import { pcmToWav } from '../../supabase/functions/_shared/wav.js'
 import { assembleChapter } from '../../supabase/functions/_shared/chapterAudio.js'
 import { DEFAULT_STYLE, DEFAULT_VOICE, isStyle, isVoice, voiceInfo, voiceProvider } from '../../supabase/functions/_shared/ttsConfig.js'
+import { listenLine, voiceLabel } from '../lib/listenUi'
 import ListenVoiceSheet from './ListenVoiceSheet'
+import { BibleReaderSheet } from './BibleReaderSheet'
 
 const SPEEDS = [0.75, 1, 1.25, 1.5]
 const WAITING = new Set(['preparing', 'buffering'])
@@ -93,7 +95,10 @@ function PlayButton({ status, onClick, size = 'lg' }) {
 }
 
 // Read-aloud for one chapter. The parent keys this on chapter + translation, so
-// navigating unmounts it, which aborts the request and stops playback.
+// navigating unmounts it, which aborts the request and stops playback. It
+// stays mounted while hidden: the controls render in a "Listen" sheet when
+// `sheetOpen`, the mini player shows while playing with the sheet closed, and
+// `onStatus` reports the status so the reader's toolbar button can follow.
 //
 // The whole chapter is one track from the bible-tts function: ElevenLabs
 // streams (played through Media Source as it arrives, with real verse
@@ -101,7 +106,7 @@ function PlayButton({ status, onClick, size = 'lg' }) {
 // speed on one shared <audio> element. When no AI voice can read, the device
 // voice (speechSynthesis, src/lib/deviceVoice.js) reads the chapter one
 // utterance per verse so the highlight follows.
-export default function ListenPlayer({ translation, book, chapter, verses, autoStart = false, onAutoStarted, onActiveVerse, onNextChapter, nextChapter, hideMini = false }) {
+export default function ListenPlayer({ translation, book, chapter, verses, autoStart = false, onAutoStarted, onActiveVerse, onNextChapter, nextChapter, hideMini = false, sheetOpen = false, onSheetClose, onOpen, onStatus }) {
   const doc = useMemo(() => assembleChapter(verses), [verses])
   const order = useMemo(() => doc.marks.map((m) => m.verse), [doc])
   const estimate = doc.text.length / CHARS_PER_SEC
@@ -119,8 +124,6 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
   const [voice, setVoice] = useState(() => (isVoice(readPref('bible:ttsVoice')) ? readPref('bible:ttsVoice') : DEFAULT_VOICE))
   const [style, setStyle] = useState(() => (isStyle(readPref('bible:ttsStyle')) ? readPref('bible:ttsStyle') : DEFAULT_STYLE))
   const [voiceOpen, setVoiceOpen] = useState(false)
-  const [cardVisible, setCardVisible] = useState(true)
-  const cardRef = useRef(null)
   // Playback session state that event handlers and async work read. A new
   // AbortController per session; anything resolving for an old one is dropped.
   // mode: null (loading) | 'ai' | 'device'.
@@ -569,14 +572,9 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
     // doc/translation are fixed for this instance: the parent remounts it per chapter.
   }, [])
 
-  // The mini player shows once the card has scrolled out of view.
-  useEffect(() => {
-    const el = cardRef.current
-    if (!el || typeof IntersectionObserver === 'undefined') return
-    const io = new IntersectionObserver(([entry]) => setCardVisible(entry.isIntersecting), { rootMargin: '-64px 0px 0px 0px' })
-    io.observe(el)
-    return () => io.disconnect()
-  }, [])
+  useEffect(() => { onStatus?.(status) }, [status])
+  // Unmounting stops playback, so the reader goes back to idle.
+  useEffect(() => () => onStatus?.('idle'), [])
 
   if (!doc.text) return null
 
@@ -584,19 +582,16 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
   const verseLabel = verse == null ? '' : verses.find((v) => v.verse === verse)?.label ?? String(verse)
   const minutes = Math.max(1, Math.round(estimate / 60 / speed))
   const providerName = voiceProvider(voice) === 'elevenlabs' ? 'ElevenLabs' : 'Gemini'
-  const line = status === 'preparing' ? 'Preparing chapter…'
-    : status === 'buffering' ? 'Loading audio…'
-      : status === 'offline' || status === 'error' ? message
-        : status === 'ended' ? 'Chapter finished'
-          : status === 'idle' ? `${providerName} voice · about ${minutes} min`
-            : `${status === 'paused' ? 'Paused · ' : ''}Verse ${verseLabel}`
+  const line = listenLine({ status, message, verseLabel, minutes, providerName })
   const problem = status === 'offline' || status === 'error'
   const loadedTo = exact || device ? total : buffered
+  // Inside the sheet while it is open: the modal makes the rest of the page inert.
+  const announce = <p className="sr-only" role="status" aria-live="polite">{problem ? message : ANNOUNCE[status] ?? ''}</p>
 
-  const mini = started && !cardVisible && !hideMini && createPortal(
+  const mini = started && !sheetOpen && !hideMini && createPortal(
     <div className="tts-mini animate-rise fixed z-sticky flex items-center gap-2 overflow-hidden rounded-2xl border border-line bg-surface p-1.5 pr-1 shadow-lift motion-reduce:animate-none">
       <PlayButton status={status} onClick={toggle} size="sm" />
-      <button type="button" onClick={() => cardRef.current?.scrollIntoView({ block: 'center' })} className="min-h-11 min-w-0 flex-1 text-left" aria-label="Show the full player">
+      <button type="button" onClick={onOpen} className="min-h-11 min-w-0 flex-1 text-left" aria-label="Show the full player">
         <span className="block truncate text-sm font-semibold">{book} {chapter}{verseLabel ? `:${verseLabel}` : ''}</span>
         <span className="block truncate text-xs text-muted">{line}</span>
       </button>
@@ -604,8 +599,12 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
       <div aria-hidden="true" className="absolute inset-x-0 bottom-0 h-0.5 bg-raised"><div className="h-full bg-brand-strong dark:bg-brand" style={{ width: pct(time, total) }} /></div>
     </div>, document.body)
 
-  return <section ref={cardRef} aria-label={`Listen to ${book} ${chapter}`} className="mb-7 rounded-2xl border border-line bg-surface p-4 shadow-soft">
-    <p className="sr-only" role="status" aria-live="polite">{problem ? message : ANNOUNCE[status] ?? ''}</p>
+  // The voice sheet is a sibling, not a child: React would bubble its Escape
+  // (cancel) up to the Listen sheet and close both.
+  return <>
+    {!sheetOpen && announce}
+    {sheetOpen && <BibleReaderSheet title="Listen" onClose={onSheetClose}>
+    {announce}
     <div className="flex items-center gap-3">
       <PlayButton status={status} onClick={toggle} />
       <div className="min-w-0 flex-1">
@@ -615,7 +614,7 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
       <button type="button" onClick={() => setVoiceOpen(true)} aria-haspopup="dialog" className="flex h-11 min-w-11 max-w-[7rem] shrink-0 items-center justify-center rounded-full bg-raised px-3 text-xs font-bold text-ink" aria-label={`Voice ${voice}. Change voice and reading style`}><span className="truncate">{voice}</span></button>
       <button type="button" onClick={changeSpeed} className="flex h-11 min-w-11 shrink-0 items-center justify-center rounded-full bg-raised px-3 text-xs font-bold tabular-nums text-ink" aria-label={`Playback speed ${speed}×. Change speed`}>{speed}×</button>
     </div>
-    {voiceOpen && <ListenVoiceSheet voice={voice} style={style} playing={started} onPause={() => { if (status === 'playing' || WAITING.has(status)) pause() }} onVoice={chooseVoice} onStyle={chooseStyle} onClose={() => setVoiceOpen(false)} />}
+    <p className="mt-2 text-xs text-muted">{voiceLabel(device)}</p>
 
     {started && <div className="mt-3">
       {status === 'preparing'
@@ -667,6 +666,8 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
         </button>
       </div>}
     </div>}
+    </BibleReaderSheet>}
+    {sheetOpen && voiceOpen && <ListenVoiceSheet voice={voice} style={style} playing={started} onPause={() => { if (status === 'playing' || WAITING.has(status)) pause() }} onVoice={chooseVoice} onStyle={chooseStyle} onClose={() => setVoiceOpen(false)} />}
     {mini}
-  </section>
+  </>
 }
