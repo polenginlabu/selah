@@ -470,6 +470,13 @@ export default function BibleReader() {
     setListenAutoStart(`${target[0]}:${target[1]}:${translation}`)
     goTo(...target)
   }
+  // The chapter "Auto-play next" goes to, so the player can fetch its audio near the end of this one.
+  function listenNextTarget() {
+    const target = chapterStep(1)
+    if (!target) return undefined
+    const load = LEGACY_BIBLES.some((b) => b.id === translation) ? getLegacyChapter : getBibleChapter
+    return { book: target[0], chapter: target[1], verses: () => load(target[0], target[1], translation).then((data) => data.verses) }
+  }
   // Horizontal swipes on the passage change chapter. The start point is captured
   // on touchstart (per finger, so a second finger never mis-matches the gesture);
   // the decision happens on touchend so taps (verse selection) and vertical
@@ -645,7 +652,7 @@ export default function BibleReader() {
     {current && !loading && !error && <>
       {AUDIO_TRANSLATIONS.includes(translation) && <ListenPlayer key={requestKey} translation={translation} book={book} chapter={chapter} verses={current.verses}
         autoStart={listenAutoStart === requestKey} onAutoStarted={() => setListenAutoStart(null)} onActiveVerse={setReadingVerse} hideMini={Boolean(selection)}
-        onNextChapter={lastChapter ? undefined : listenNextChapter} />}
+        onNextChapter={lastChapter ? undefined : listenNextChapter} nextChapter={listenNextTarget()} />}
       <article ref={articleRef} aria-label={`${book} ${chapter}, ${version.name}`} tabIndex={-1} className={`bible-passage ${font === 'serif' ? 'font-serif' : 'font-sans'}`} style={{ fontSize: `${fontSize}px` }}
         onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} onTouchCancel={handleTouchCancel} onClickCapture={handleArticleClickCapture} onKeyDown={handlePassageKeyDown}>
         {paragraphs.map((group, i) => <div key={`${group.key}-${i}`}>

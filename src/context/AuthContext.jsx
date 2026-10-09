@@ -1,6 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
-import { clearTtsAudio } from '../lib/ttsCache'
 
 const AuthContext = createContext(undefined)
 
@@ -14,8 +13,8 @@ export function AuthProvider({ children }) {
       setLoading(false)
     })
     const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
-      // Read-aloud audio is per account; the next sign-in starts clean.
-      if (event === 'SIGNED_OUT') clearTtsAudio()
+      // Read-aloud audio of licensed text kept by earlier builds; nothing writes it now.
+      if (event === 'SIGNED_OUT') globalThis.caches?.delete('selah-tts-v1').catch(() => {})
       setUser(session?.user ?? null)
       setLoading(false)
     })

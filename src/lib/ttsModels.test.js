@@ -7,7 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   DEFAULT_TTS_MODELS, parseModelList, pickModels, nextPacificMidnight, isQuotaError, isUnknownModel,
-  isDailyQuota, retryDelaySec, exhaustionUntil, quotaReply, liveCacheModel,
+  isDailyQuota, retryDelaySec, exhaustionUntil, quotaReply,
 } from '../../supabase/functions/_shared/ttsModels.js'
 
 const at = (iso) => Date.parse(iso)
@@ -28,7 +28,6 @@ test('default chain order: 3.8 Flash, 3.1 Flash, 2.5 Flash, 3.8 Flash Lite', () 
   assert.match(DEFAULT_TTS_MODELS[1], /3\.1-flash/)
   assert.equal(DEFAULT_TTS_MODELS[2], 'gemini-2.5-flash-preview-tts')
   assert.match(DEFAULT_TTS_MODELS[3], /3\.8-flash-lite/)
-  assert.equal(liveCacheModel('m'), 'live-m')
 })
 
 test('pickModels: keeps chain order and skips models still exhausted', () => {
@@ -97,15 +96,6 @@ test('exhaustionUntil: daily -> next Pacific midnight; per-minute -> 60 s or the
   assert.equal(exhaustionUntil({ body: MINUTE_BODY, now }), now + 95_000)
   assert.equal(exhaustionUntil({ body: '{"retryDelay":"5s"}', now }), now + 60_000)
   assert.equal(exhaustionUntil({ body: '', now }), now + 60_000)
-})
-
-test('live audio is cached under its own path, never a TTS model path', async () => {
-  const { audioObjectPath } = await import('../../supabase/functions/_shared/ttsConfig.js')
-  const base = { voice: 'Kore', style: 'narrator', translation: 'kjv', text: 'Jesus wept.' }
-  const tts = await audioObjectPath({ ...base, model: DEFAULT_TTS_MODELS[0] })
-  const live = await audioObjectPath({ ...base, model: liveCacheModel('gemini-3.8-live-preview') })
-  assert.match(live, /^live-gemini-3\.8-live-preview\/Kore\/narrator\/kjv\/[0-9a-f]{64}\.wav$/)
-  assert.notEqual(live, tts)
 })
 
 test('exhaustion migration: service role only, no client policies or grants, forward-only', async () => {

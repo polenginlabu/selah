@@ -1,5 +1,5 @@
 // Gemini TTS model fallback chain and per-model quota bookkeeping, used by the
-// bible-tts Edge Function. Pure JS (no Deno or Node APIs) so the node tests
+// bible-tts Edge Function when Gemini reads a chapter. Pure JS (no Deno or Node APIs) so the node tests
 // can import it directly.
 //
 // On the free tier every TTS model has its own small quota (a few requests a
@@ -18,15 +18,6 @@ export const DEFAULT_TTS_MODELS = [
   'gemini-2.5-flash-preview-tts',
   'gemini-3.8-flash-lite-preview-tts',
 ]
-
-// Last resort when every TTS model is exhausted: a Live API model reads the
-// text, and only audio whose transcript matches the text is kept. Override
-// with GEMINI_LIVE_MODEL; confirm the id in AI Studio. Set it to "off" to disable.
-export const DEFAULT_LIVE_MODEL = 'gemini-3.8-live-preview'
-
-// Storage paths and the exhaustion table key Live audio under this prefix so
-// it never collides with a TTS model's.
-export const liveCacheModel = (model) => `live-${model}`
 
 const MINUTE_MS = 60_000
 // A per-minute window this long or longer means "not soon": the client should

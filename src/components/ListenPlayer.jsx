@@ -1,31 +1,33 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { PlayIcon, PauseIcon, SkipBackIcon, SkipForwardIcon, XIcon } from '../icons'
-import { TTS_CHARS_PER_SEC, TTS_MAX_ATTEMPTS, backoffMs, chunkKey, createConcurrency, isQuotaExhausted, locateTime, nextToFetch, planChunks, planVerses, requestTtsChunk, timeline, verseAt, verseStart, wavDurationSec } from '../lib/bibleTts'
+import { CHARS_PER_SEC, isCreditsExhausted, isQuotaExhausted, requestChapter, verseAt, verseAtTime } from '../lib/bibleTts'
+import { bufferedEnd, canStream, createStreamSink, readTrack } from '../lib/streamAudio'
 import { canSpeak, cancelSpeech, deviceVoices, pickEnglishVoice, speak, speechSegments, unlockSpeech } from '../lib/deviceVoice'
-import { getTtsAudio, putTtsAudio } from '../lib/ttsCache'
 import { pcmToWav } from '../../supabase/functions/_shared/wav.js'
-import { DEFAULT_STYLE, DEFAULT_VOICE, VOICES, isStyle, isVoice } from '../../supabase/functions/_shared/ttsConfig.js'
+import { assembleChapter } from '../../supabase/functions/_shared/chapterAudio.js'
+import { DEFAULT_STYLE, DEFAULT_VOICE, isStyle, isVoice, voiceInfo, voiceProvider } from '../../supabase/functions/_shared/ttsConfig.js'
 import ListenVoiceSheet from './ListenVoiceSheet'
 
 const SPEEDS = [0.75, 1, 1.25, 1.5]
-const WAITING = new Set(['preparing', 'buffering', 'cooldown'])
-const ANNOUNCE = {
-  preparing: 'Preparing voice', buffering: 'Loading more audio', playing: 'Playing', paused: 'Paused',
-  cooldown: 'The AI voice is busy, retrying shortly.', ended: 'Chapter finished',
-}
-const DEVICE_NOTE = {
-  quota: 'Using device voice - AI voice limit reached today',
-  failed: 'Using device voice - AI voice is unavailable right now',
-}
+const WAITING = new Set(['preparing', 'buffering'])
+const ANNOUNCE = { preparing: 'Preparing chapter', buffering: 'Loading audio', playing: 'Playing', paused: 'Paused', ended: 'Chapter finished' }
 
-// When the server last said the AI voice is out for the day. Until then every
+/** Non-blocking note when another provider than the chosen voice's is reading. */
+function fallbackNote(track, voice) {
+  if (!track?.provider || track.provider === voiceProvider(voice)) return null
+  return track.fallback === 'quota_exceeded' ? 'ElevenLabs credits used up – using Gemini' : 'ElevenLabs is unavailable – using Gemini'
+}
+const deviceNote = (err) => (isCreditsExhausted(err) ? 'ElevenLabs credits used up – using device voice'
+  : isQuotaExhausted(err) ? 'AI voice limit reached today – using device voice'
+    : 'Using device voice')
+
+// While the server says the AI voices are out (credits or daily quota), every
 // chapter starts on the device voice instead of spending a request to find out.
-let aiPausedUntil = 0
+let aiPaused = null // { until, err }
 
 // One element for the whole app, so two chapters can never play at once, and
-// once a tap has unlocked it (iOS) later chunks and the next chapter can start
-// without another tap.
+// once a tap has unlocked it (iOS) the next chapter can start without another tap.
 let sharedAudio = null
 function getAudio() {
   if (!sharedAudio) {
@@ -41,6 +43,29 @@ function silence() {
   return silentUrl
 }
 
+// The next chapter's audio, read near the end of this one so "Auto-play next"
+// continues without a wait. One at a time; the next player takes it.
+let prefetched = null // { key, promise }
+const trackKey = ({ translation, book, chapter, voice, style }) => [translation, book, chapter, voice, style].join('|')
+
+function prefetch({ translation, book, chapter, verses, voice, style }) {
+  const key = trackKey({ translation, book, chapter, voice, style })
+  if (prefetched?.key === key) return
+  const promise = Promise.resolve()
+    .then(verses)
+    .then((list) => requestChapter({ translation, book, chapter, verses: list, voice, style }))
+    .then(async (track) => ({ ...track, ...(await readTrack(track)) }))
+    .catch(() => null)
+  prefetched = { key, promise }
+}
+
+function takePrefetched(key) {
+  if (prefetched?.key !== key) return null
+  const { promise } = prefetched
+  prefetched = null
+  return promise
+}
+
 function readPref(key) {
   try { return localStorage.getItem(key) } catch { return null }
 }
@@ -52,14 +77,15 @@ function clock(sec) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
 const pct = (part, whole) => `${whole > 0 ? Math.min(100, (part / whole) * 100) : 0}%`
+const isOffline = (err) => err instanceof TypeError || (typeof navigator !== 'undefined' && navigator.onLine === false)
 
 /** Play/pause with a buffering ring. */
 function PlayButton({ status, onClick, size = 'lg' }) {
   const playing = status === 'playing' || WAITING.has(status)
   const box = size === 'lg' ? 'h-14 w-14' : 'h-11 w-11'
   return <button type="button" onClick={onClick} aria-label={playing ? 'Pause' : status === 'paused' ? 'Resume' : 'Listen'}
-    className={`relative flex ${box} shrink-0 items-center justify-center rounded-full bg-brand-strong text-on-brand shadow-soft transition-transform duration-150 ease-out active:scale-95`}>
-    {WAITING.has(status) && <svg aria-hidden="true" viewBox="0 0 56 56" className="absolute -inset-1 h-[calc(100%+0.5rem)] w-[calc(100%+0.5rem)] animate-spin text-brand">
+    className={`relative flex ${box} shrink-0 items-center justify-center rounded-full bg-brand-strong text-on-brand shadow-soft transition-transform duration-150 ease-out active:scale-95 motion-reduce:transition-none`}>
+    {WAITING.has(status) && <svg aria-hidden="true" viewBox="0 0 56 56" className="absolute -inset-1 h-[calc(100%+0.5rem)] w-[calc(100%+0.5rem)] animate-spin text-brand motion-reduce:animate-none">
       <circle cx="28" cy="28" r="26.5" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeDasharray="40 127" />
     </svg>}
     {playing ? <PauseIcon width={size === 'lg' ? 22 : 18} height={size === 'lg' ? 22 : 18} /> : <PlayIcon width={size === 'lg' ? 22 : 18} height={size === 'lg' ? 22 : 18} className="translate-x-px" />}
@@ -67,30 +93,27 @@ function PlayButton({ status, onClick, size = 'lg' }) {
 }
 
 // Read-aloud for one chapter. The parent keys this on chapter + translation, so
-// navigating unmounts it, which aborts requests and stops playback.
+// navigating unmounts it, which aborts the request and stops playback.
 //
-// Speed: the first chunk is small (src/lib/bibleTts.js planChunks) so audio
-// starts after a few seconds; the rest of the chapter is fetched in playback
-// order, a few at a time (nextToFetch, createConcurrency), backing off on
-// 429/503; every chunk is cached here (src/lib/ttsCache.js) and on the
-// server, so replays are instant.
-//
-// When the AI voice is out of quota (code quota_exhausted) or one chunk keeps
-// failing, the remaining chunks are read by the device voice (speechSynthesis,
-// src/lib/deviceVoice.js), one utterance per verse so the highlight follows.
-// Chunks that already have AI audio still play it.
-export default function ListenPlayer({ translation, book, chapter, verses, autoStart = false, onAutoStarted, onActiveVerse, onNextChapter, hideMini = false }) {
-  const plan = useMemo(() => planChunks(verses), [verses])
-  const order = useMemo(() => planVerses(plan), [plan])
-  const [status, setStatus] = useState('idle') // idle | preparing | playing | paused | buffering | cooldown | offline | error | ended
-  const [index, setIndex] = useState(0)
+// The whole chapter is one track from the bible-tts function: ElevenLabs
+// streams (played through Media Source as it arrives, with real verse
+// timings), Gemini and cache hits arrive whole. Native play, pause, seek and
+// speed on one shared <audio> element. When no AI voice can read, the device
+// voice (speechSynthesis, src/lib/deviceVoice.js) reads the chapter one
+// utterance per verse so the highlight follows.
+export default function ListenPlayer({ translation, book, chapter, verses, autoStart = false, onAutoStarted, onActiveVerse, onNextChapter, nextChapter, hideMini = false }) {
+  const doc = useMemo(() => assembleChapter(verses), [verses])
+  const order = useMemo(() => doc.marks.map((m) => m.verse), [doc])
+  const estimate = doc.text.length / CHARS_PER_SEC
+  const [status, setStatus] = useState('idle') // idle | preparing | playing | paused | buffering | offline | error | ended
   const [time, setTime] = useState(0)
+  const [total, setTotal] = useState(estimate)
+  const [exact, setExact] = useState(false)
+  const [buffered, setBuffered] = useState(0)
   const [verse, setVerse] = useState(null)
-  const [, setReadyTick] = useState(0)
   const [message, setMessage] = useState('')
-  const [cooldownUntil, setCooldownUntil] = useState(0)
-  const [deviceNote, setDeviceNote] = useState(null) // null | 'quota' | 'failed'
-  const [now, setNow] = useState(() => Date.now())
+  const [note, setNote] = useState(null)
+  const [device, setDevice] = useState(false)
   const [speed, setSpeed] = useState(() => (SPEEDS.includes(Number(readPref('bible:ttsSpeed'))) ? Number(readPref('bible:ttsSpeed')) : 1))
   const [autoNext, setAutoNext] = useState(() => readPref('bible:ttsContinue') === 'true')
   const [voice, setVoice] = useState(() => (isVoice(readPref('bible:ttsVoice')) ? readPref('bible:ttsVoice') : DEFAULT_VOICE))
@@ -98,24 +121,36 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
   const [voiceOpen, setVoiceOpen] = useState(false)
   const [cardVisible, setCardVisible] = useState(true)
   const cardRef = useRef(null)
-  // Playback session state that event handlers and async fetches read. A new
+  // Playback session state that event handlers and async work read. A new
   // AbortController per session; anything resolving for an old one is dropped.
+  // mode: null (loading) | 'ai' | 'device'.
   const live = useRef(null)
   live.current ??= {
-    controller: null, ready: new Map(), failed: new Map(), inflight: new Set(), durations: [], index: 0, waiting: null, wantPlay: false, played: false, url: null, verse: null, cooldownUntil: 0,
-    // Adaptive fetch limit, failed tries per chunk, device-voice mode and the current speech session.
-    conc: createConcurrency(), attempts: new Map(), device: false, deviceErr: null, speech: null,
+    controller: null, mode: null, url: null, blob: null, marks: [], final: false, truncated: false, speech: null,
+    wantPlay: false, verse: null, time: 0, seekTo: 0, prefetched: false, failed: false, err: null,
   }
   const L = live.current
-  L.props = { onActiveVerse, onNextChapter }
+  L.props = { onActiveVerse, onNextChapter, nextChapter }
   L.speed = speed
   L.autoNext = autoNext
-  // Read at fetch time: the shared-element listeners keep first-render closures.
+  // Read at request time: the shared-element listeners keep first-render closures.
   L.voice = voice
   L.style = style
 
-  const isLoaded = () => Boolean(L.url) && L.url !== silentUrl && !L.waiting
-  const durationOf = (i) => L.durations[i] ?? plan[i].text.length / TTS_CHARS_PER_SEC
+  const isAudio = () => L.mode === 'ai' && Boolean(L.url) && L.url !== silentUrl
+  // Real length once the whole track is in, else the estimate (or what is buffered, if longer).
+  function duration() {
+    const audio = getAudio()
+    if (L.final && Number.isFinite(audio.duration) && audio.duration > 0) return audio.duration
+    return Math.max(estimate, bufferedEnd(audio))
+  }
+  const verseAtSec = (t, dur) => (L.marks.length ? verseAtTime(L.marks, t) : verseAt(doc, t / dur))
+  function verseStartSec(v, dur) {
+    const timed = L.marks.find((m) => m.verse === v)
+    if (timed) return timed.t
+    const mark = doc.marks.find((m) => m.verse === v)
+    return mark ? (mark.at / doc.text.length) * dur : 0
+  }
 
   function markVerse(v) {
     if (L.verse === v) return
@@ -123,97 +158,22 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
     setVerse(v)
     L.props.onActiveVerse?.(v)
   }
+  function showTime(t) {
+    L.time = t
+    setTime(t)
+  }
 
   // Fixed copy only: server and browser error text never reaches the screen.
   function fail(err) {
-    const offline = err instanceof TypeError || (typeof navigator !== 'undefined' && navigator.onLine === false)
+    const offline = isOffline(err)
+    L.failed = true
     getAudio().pause()
     stopSpeech()
     setStatus(offline ? 'offline' : 'error')
-    setMessage(offline ? 'You’re offline. Reconnect to load the rest of this chapter.'
+    setMessage(offline ? 'You’re offline. Reconnect to listen to this chapter.'
       : err?.status === 401 ? 'Sign in to listen to Scripture.'
-        : isQuotaExhausted(err) ? 'Daily AI voice limit reached. Try again later.'
+        : isQuotaExhausted(err) || isCreditsExhausted(err) ? 'The AI voices are used up for now. Try again later.'
           : 'Audio is unavailable right now. Try again shortly.')
-  }
-
-  function startCooldown(sec = 60) {
-    L.cooldownUntil = Math.max(L.cooldownUntil, Date.now() + sec * 1000)
-    setCooldownUntil(L.cooldownUntil)
-    setNow(Date.now())
-    if (L.waiting) setStatus('cooldown')
-  }
-
-  function pump() {
-    const controller = L.controller
-    if (!controller || L.device) return
-    const done = { has: (i) => L.ready.has(i) || L.failed.has(i) }
-    for (const i of nextToFetch({ total: plan.length, cursor: L.index, ready: done, inflight: L.inflight, maxInflight: L.conc.limit, cooldownUntil: L.cooldownUntil })) load(i, controller)
-  }
-
-  function load(i, controller) {
-    L.inflight.add(i)
-    const { voice, style } = L
-    const key = chunkKey({ translation, book, chapter, text: plan[i].text, voice, style })
-    getTtsAudio(key)
-      .then((hit) => hit ?? requestTtsChunk({ translation, text: plan[i].text, voice, style, signal: controller.signal })
-        .then((blob) => { putTtsAudio(key, blob); return blob }))
-      .then((blob) => {
-        if (L.controller !== controller) return
-        L.inflight.delete(i)
-        L.attempts.delete(i)
-        L.conc.success()
-        L.ready.set(i, URL.createObjectURL(blob))
-        L.durations[i] ??= wavDurationSec(blob.size)
-        setReadyTick((n) => n + 1)
-        if (L.waiting?.index === i) playChunk(i, L.waiting.fraction)
-        else pump()
-      }, (err) => {
-        if (L.controller !== controller) return
-        L.inflight.delete(i)
-        if (err?.name === 'AbortError') return
-        if (isQuotaExhausted(err)) {
-          aiPausedUntil = Date.now() + (err.retryAfterSec ?? 3600) * 1000
-          return switchToDeviceVoice('quota', err)
-        }
-        // Busy or briefly down: fewer requests at once, and the whole queue
-        // waits out a jittered backoff (at least the server's Retry-After).
-        if (err?.status === 429 || err?.status === 502 || err?.status === 503) {
-          L.conc.throttle()
-          const tries = (L.attempts.get(i) ?? 0) + 1
-          L.attempts.set(i, tries)
-          if (tries >= TTS_MAX_ATTEMPTS) return switchToDeviceVoice('failed', err)
-          return startCooldown(backoffMs(tries - 1, { retryAfterSec: err.retryAfterSec }) / 1000)
-        }
-        L.failed.set(i, err)
-        if (L.waiting?.index === i) fail(err)
-      })
-  }
-
-  // The rest of the chapter is read by the device voice; nothing more is fetched.
-  function switchToDeviceVoice(reason, err) {
-    if (L.device) return
-    L.device = true
-    L.deviceErr = err
-    L.cooldownUntil = 0
-    setCooldownUntil(0)
-    setDeviceNote(canSpeak() ? reason : null)
-    if (L.waiting) playChunk(L.waiting.index, L.waiting.fraction)
-  }
-
-  function clearDevice() {
-    aiPausedUntil = 0
-    L.device = false
-    L.deviceErr = null
-    L.attempts = new Map()
-    L.conc = createConcurrency()
-    setDeviceNote(null)
-  }
-
-  // Back to the AI voice from the next chunk; the current one finishes as it is.
-  function retryAi() {
-    clearDevice()
-    L.failed = new Map()
-    pump()
   }
 
   function stopSpeech() {
@@ -222,84 +182,129 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
     cancelSpeech()
   }
 
-  // Reads chunk i from `fraction` with the device voice, one utterance per verse.
-  function speakChunk(i, fraction) {
-    const chunk = plan[i]
-    const len = chunk.text.length
-    const segments = speechSegments(chunk, fraction * len)
-    const session = { index: i, pos: segments[0]?.at ?? 0 }
-    L.speech = session
-    L.waiting = null
+  function dropUrl() {
+    if (L.url && L.url !== silentUrl) URL.revokeObjectURL(L.url)
     L.url = null
-    getAudio().pause()
-    const show = (pos) => {
-      session.pos = pos
-      setTime((pos / len) * durationOf(i))
-      markVerse(verseAt(chunk, pos / len))
-    }
-    show(session.pos)
-    if (!L.wantPlay) return setStatus('paused')
-    const voice = pickEnglishVoice(deviceVoices(), VOICES.find((v) => v.id === L.voice)?.group)
-    const current = () => L.speech === session && L.wantPlay
-    const next = (k) => {
-      if (!current()) return
-      if (k >= segments.length) {
-        L.speech = null
-        return i + 1 < plan.length ? playChunk(i + 1) : finish()
-      }
-      const seg = segments[k]
-      try {
-        speak(seg.text, {
-          voice,
-          rate: L.speed,
-          onstart: () => {
-            if (!current()) return
-            L.played = true
-            setStatus('playing')
-            show(seg.at)
-          },
-          onboundary: (c) => { if (current()) show(seg.at + c) },
-          onend: () => next(k + 1),
-          onerror: () => { if (current()) fail(L.deviceErr) },
-        })
-      } catch {
-        fail(L.deviceErr)
-      }
-    }
-    next(0)
   }
 
-  function playChunk(i, fraction = 0) {
-    const audio = getAudio()
+  function reset() {
+    L.controller?.abort()
+    L.controller = null
+    dropUrl()
+    Object.assign(L, { mode: null, blob: null, marks: [], final: false, truncated: false, wantPlay: false, seekTo: 0, prefetched: false, failed: false, err: null })
     stopSpeech()
-    L.index = i
-    setIndex(i)
-    const url = L.ready.get(i)
-    markVerse(verseAt(plan[i], fraction))
-    if (!url) {
-      if (L.device) return canSpeak() ? speakChunk(i, fraction) : fail(L.deviceErr)
-      L.waiting = { index: i, fraction }
-      setTime(fraction * durationOf(i))
-      // Let the unlock clip finish; anything real stops while we wait.
-      if (L.url !== silentUrl) audio.pause()
-      if (L.failed.has(i)) return fail(L.failed.get(i))
-      setStatus(L.cooldownUntil > Date.now() ? 'cooldown' : L.played ? 'buffering' : 'preparing')
-      return pump()
+    const audio = getAudio()
+    audio.pause()
+    audio.removeAttribute('src')
+    audio.load()
+    setBuffered(0)
+    setTotal(estimate)
+    setExact(false)
+    setNote(null)
+    setDevice(false)
+  }
+
+  async function begin(startSec = 0) {
+    reset()
+    const controller = new AbortController()
+    L.controller = controller
+    L.wantPlay = true
+    L.seekTo = startSec
+    setMessage('')
+    // Unlock the element and speech inside this tap; the real track replaces it shortly.
+    const audio = getAudio()
+    L.url = silence()
+    audio.src = L.url
+    audio.play().catch(() => {})
+    unlockSpeech()
+    if (typeof navigator !== 'undefined' && navigator.mediaSession && typeof MediaMetadata !== 'undefined') {
+      navigator.mediaSession.metadata = new MediaMetadata({ title: `${book} ${chapter}`, artist: 'Selah', album: translation.toUpperCase() })
     }
-    L.waiting = null
-    L.url = url
-    audio.src = url
+    if (aiPaused && Date.now() < aiPaused.until && canSpeak()) return startDevice(startSec, aiPaused.err)
+    setStatus('preparing')
+    let track
+    try {
+      track = (await takePrefetched(trackKey({ translation, book, chapter, voice: L.voice, style: L.style })))
+        ?? await requestChapter({ translation, book, chapter, verses, voice: L.voice, style: L.style, signal: controller.signal })
+    } catch (err) {
+      if (L.controller === controller && err?.name !== 'AbortError') aiFailed(err, startSec)
+      return
+    }
+    if (L.controller !== controller) return
+    setNote(fallbackNote(track, L.voice))
+    playTrack(track, controller)
+  }
+
+  async function playTrack(track, controller) {
+    const stale = () => L.controller !== controller
+    const audio = getAudio()
+    L.mode = 'ai'
+    L.marks = [...(track.marks ?? [])]
+    if (track.blob || track.format !== 'ndjson' || !canStream()) {
+      let loaded = track
+      if (!track.blob) {
+        try {
+          loaded = await readTrack(track)
+        } catch (err) {
+          if (!stale() && err?.name !== 'AbortError') aiFailed(err, L.seekTo)
+          return
+        }
+        if (stale()) return
+      }
+      L.marks = loaded.marks ?? []
+      L.blob = loaded.blob
+      L.final = true
+      L.url = URL.createObjectURL(loaded.blob)
+      audio.src = L.url
+      return startPlayback()
+    }
+
+    const sink = createStreamSink(audio)
+    L.url = sink.url
+    let started = false
+    try {
+      const loaded = await readTrack(track, {
+        onAudio: async (bytes) => {
+          if (stale()) throw new DOMException('Stopped', 'AbortError')
+          await sink.append(bytes)
+          setBuffered(bufferedEnd(audio))
+          if (!started) {
+            started = true
+            startPlayback()
+          }
+        },
+        onMarks: (add) => { if (!stale()) L.marks.push(...add) },
+      })
+      if (stale()) return
+      L.blob = loaded.blob
+      await sink.end()
+      if (stale()) return
+      L.final = true
+      setBuffered(bufferedEnd(audio))
+      setExact(true)
+    } catch (err) {
+      if (stale() || err?.name === 'AbortError') return
+      await sink.end()
+      if (!started) return aiFailed(err, L.seekTo)
+      // What arrived plays to its end, then the device voice reads on (onEnded).
+      L.truncated = true
+      L.err = err
+    }
+  }
+
+  function startPlayback() {
+    const audio = getAudio()
     audio.defaultPlaybackRate = L.speed
     audio.playbackRate = L.speed
     // Before metadata loads this is kept as the start position.
-    if (fraction > 0) audio.currentTime = fraction * durationOf(i)
-    setTime(fraction * durationOf(i))
-    pump()
+    if (L.seekTo > 0) {
+      audio.currentTime = L.seekTo
+      L.seekTo = 0
+    }
     if (!L.wantPlay) return setStatus('paused')
+    const url = L.url
     audio.play().then(() => {
-      if (L.url !== url) return
-      L.played = true
-      setStatus('playing')
+      if (L.url === url && L.wantPlay) setStatus('playing')
     }, (err) => {
       if (L.url !== url) return
       // Refused outside a tap: the next tap on Resume is a fresh gesture.
@@ -310,44 +315,67 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
     })
   }
 
-  function reset() {
-    L.controller?.abort()
-    L.controller = null
-    L.ready.forEach((url) => URL.revokeObjectURL(url))
-    L.ready = new Map()
-    L.failed = new Map()
-    L.inflight = new Set()
-    L.waiting = null
-    L.url = null
-    L.wantPlay = false
-    stopSpeech()
-    const audio = getAudio()
-    audio.pause()
-    audio.removeAttribute('src')
-    audio.load()
+  // No AI voice could read: the device voice reads the chapter, unless signed
+  // out or offline (nothing to fall back to that would help).
+  function aiFailed(err, startSec) {
+    if (err?.status === 401 || isOffline(err) || !canSpeak()) return fail(err)
+    if (isQuotaExhausted(err) || isCreditsExhausted(err)) aiPaused = { until: Date.now() + (err.retryAfterSec ?? 3600) * 1000, err }
+    startDevice(startSec, err)
   }
 
-  function begin(i = 0, fraction = 0) {
-    reset()
-    L.controller = new AbortController()
-    L.wantPlay = true
-    L.played = false
-    L.attempts = new Map()
-    L.conc = createConcurrency()
-    L.device = Date.now() < aiPausedUntil && canSpeak()
-    L.deviceErr = L.device ? { code: 'quota_exhausted' } : null
-    setDeviceNote(L.device ? 'quota' : null)
-    setMessage('')
-    // Unlock the element and speech inside this tap; the real chunk replaces it shortly.
-    const audio = getAudio()
-    L.url = silentUrl ?? silence()
-    audio.src = L.url
-    audio.play().catch(() => {})
-    unlockSpeech()
-    if (typeof navigator !== 'undefined' && navigator.mediaSession && typeof MediaMetadata !== 'undefined') {
-      navigator.mediaSession.metadata = new MediaMetadata({ title: `${book} ${chapter}`, artist: 'Selah', album: translation.toUpperCase() })
+  function startDevice(startSec, err) {
+    L.mode = 'device'
+    L.err = err
+    setDevice(true)
+    setNote(deviceNote(err))
+    setTotal(estimate)
+    setExact(false)
+    getAudio().pause()
+    dropUrl()
+    speakFrom((startSec / estimate) * doc.text.length)
+  }
+
+  // Reads from character `charPos` with the device voice, one utterance per verse.
+  function speakFrom(charPos) {
+    stopSpeech()
+    const len = doc.text.length
+    const segments = speechSegments(doc, charPos)
+    const session = { pos: segments[0]?.at ?? 0 }
+    L.speech = session
+    const show = (pos) => {
+      session.pos = pos
+      showTime((pos / len) * estimate)
+      markVerse(verseAt(doc, pos / len))
     }
-    playChunk(i, fraction)
+    show(session.pos)
+    if (!L.wantPlay) return setStatus('paused')
+    const voice = pickEnglishVoice(deviceVoices(), voiceInfo(L.voice)?.group)
+    const current = () => L.speech === session && L.wantPlay
+    const next = (k) => {
+      if (!current()) return
+      if (k >= segments.length) {
+        L.speech = null
+        return finish()
+      }
+      const seg = segments[k]
+      try {
+        speak(seg.text, {
+          voice,
+          rate: L.speed,
+          onstart: () => {
+            if (!current()) return
+            setStatus('playing')
+            show(seg.at)
+          },
+          onboundary: (c) => { if (current()) show(seg.at + c) },
+          onend: () => next(k + 1),
+          onerror: () => { if (current()) fail(L.err) },
+        })
+      } catch {
+        fail(L.err)
+      }
+    }
+    next(0)
   }
 
   // Device speech is cancelled, not paused (speechSynthesis.pause is unreliable
@@ -359,33 +387,30 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
     setStatus('paused')
   }
 
-  const speechFraction = () => L.speech.pos / plan[L.speech.index].text.length
-
   function resume() {
     if (!L.controller) return begin()
     L.wantPlay = true
-    if (L.speech) return playChunk(L.speech.index, speechFraction())
-    if (!isLoaded()) return playChunk(L.index, L.waiting?.fraction ?? 0)
+    if (L.mode === 'device') return speakFrom(L.speech?.pos ?? 0)
+    // Still loading: it starts by itself when the audio arrives.
+    if (!isAudio()) return setStatus('preparing')
     getAudio().play().then(() => setStatus('playing'), (err) => {
       if (err?.name === 'NotAllowedError') pause()
       else if (err?.name !== 'AbortError') fail(err)
     })
   }
 
-  function retry() {
-    if (!L.controller) return begin(L.index)
-    clearDevice()
-    L.failed = new Map()
-    L.wantPlay = true
-    setMessage('')
-    playChunk(L.index, L.waiting?.fraction ?? 0)
+  const retry = () => begin(L.time)
+
+  // Back to the AI voice from where the device voice is.
+  function retryAi() {
+    aiPaused = null
+    begin(L.time)
   }
 
   function stop() {
     reset()
     setStatus('idle')
-    setIndex(0)
-    setTime(0)
+    showTime(0)
     setMessage('')
     markVerse(null)
   }
@@ -405,40 +430,55 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
   }
 
   function seek(t) {
-    const { index: i, offset } = locateTime(plan, L.durations, t)
-    if (!L.controller) return begin(i, offset / durationOf(i))
-    if (i === L.index && isLoaded()) {
-      getAudio().currentTime = offset
-      setTime(offset)
-      markVerse(verseAt(plan[i], offset / durationOf(i)))
-    } else playChunk(i, Math.min(0.999, offset / durationOf(i)))
+    if (!L.controller) return begin(t)
+    if (L.mode === 'device') return speakFrom((t / estimate) * doc.text.length)
+    if (!isAudio()) {
+      L.seekTo = t
+      return showTime(t)
+    }
+    const audio = getAudio()
+    const ranges = audio.buffered
+    // Played audio may have been dropped from the stream buffer: replay it from the whole track.
+    if (ranges.length && t < ranges.start(0)) {
+      if (L.blob) {
+        const old = L.url
+        L.url = URL.createObjectURL(L.blob)
+        audio.src = L.url
+        URL.revokeObjectURL(old)
+        L.seekTo = t
+        return startPlayback()
+      }
+      t = ranges.start(0)
+    }
+    audio.currentTime = t
+    showTime(t)
+    markVerse(verseAtSec(t, duration()))
   }
 
   function skipVerse(delta) {
     const at = Math.max(0, order.indexOf(L.verse ?? order[0]))
     const target = order[Math.max(0, Math.min(order.length - 1, at + delta))]
-    const start = verseStart(plan, target)
-    if (!start) return
-    if (!L.controller) return begin(start.index, start.fraction)
-    if (start.index === L.index && isLoaded()) {
-      const audio = getAudio()
-      audio.currentTime = start.fraction * (Number.isFinite(audio.duration) ? audio.duration : durationOf(start.index))
+    if (target == null) return
+    if (L.mode === 'device') {
       markVerse(target)
-    } else playChunk(start.index, start.fraction)
+      return speakFrom(doc.marks.find((m) => m.verse === target).at)
+    }
+    seek(verseStartSec(target, L.mode === 'ai' ? duration() : estimate))
+    markVerse(target)
   }
 
   function changeSpeed() {
     const next = SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length]
     setSpeed(next)
     savePref('bible:ttsSpeed', next)
-    if (L.controller) {
-      const audio = getAudio()
+    const audio = getAudio()
+    L.speed = next
+    if (L.mode === 'ai') {
       audio.defaultPlaybackRate = next
       audio.playbackRate = next
-      // An utterance's rate is fixed once spoken: restart it from here.
-      L.speed = next
-      if (L.speech && L.wantPlay) playChunk(L.speech.index, speechFraction())
     }
+    // An utterance's rate is fixed once spoken: restart it from here.
+    if (L.speech && L.wantPlay) speakFrom(L.speech.pos)
   }
 
   // A new voice or style is new audio: stop, and the next play uses it.
@@ -466,33 +506,49 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
   // Shared-element listeners, mounted once. Everything they read is in `live`.
   useEffect(() => {
     const audio = getAudio()
-    const mine = () => L.url && L.url !== silentUrl && audio.src === L.url
+    const mine = () => isAudio() && audio.src === L.url
     const onTime = () => {
       if (!mine()) return
-      const dur = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : durationOf(L.index)
-      setTime(audio.currentTime)
-      markVerse(verseAt(plan[L.index], audio.currentTime / dur))
+      const dur = duration()
+      const t = audio.currentTime
+      showTime(t)
+      setTotal(dur)
+      setExact(L.final)
+      markVerse(verseAtSec(t, dur))
+      // Near the end of a fully loaded track, fetch the next chapter's audio.
+      const next = L.props.nextChapter
+      if (L.final && !L.prefetched && L.autoNext && next && (dur - t < 60 || t / dur > 0.8)) {
+        L.prefetched = true
+        prefetch({ translation, ...next, voice: L.voice, style: L.style })
+      }
     }
-    const onMeta = () => {
-      if (mine() && Number.isFinite(audio.duration)) L.durations[L.index] = audio.duration
-    }
+    const onProgress = () => { if (mine()) setBuffered(bufferedEnd(audio)) }
+    const onWaiting = () => { if (mine() && L.wantPlay) setStatus('buffering') }
+    const onPlaying = () => { if (mine() && L.wantPlay) setStatus('playing') }
     const onEnded = () => {
       if (!mine()) return
-      if (L.index + 1 < plan.length) playChunk(L.index + 1)
-      else finish()
+      if (!L.truncated) return finish()
+      if (!canSpeak()) return fail(L.err)
+      const mark = doc.marks.find((m) => m.verse === L.verse) ?? doc.marks[0]
+      startDevice((mark.at / doc.text.length) * estimate, L.err)
     }
     audio.addEventListener('timeupdate', onTime)
-    audio.addEventListener('loadedmetadata', onMeta)
+    audio.addEventListener('progress', onProgress)
+    audio.addEventListener('waiting', onWaiting)
+    audio.addEventListener('playing', onPlaying)
     audio.addEventListener('ended', onEnded)
     const session = typeof navigator !== 'undefined' ? navigator.mediaSession : null
-    const actions = { play: resume, pause, previoustrack: () => skipVerse(-1), nexttrack: () => skipVerse(1) }
+    const actions = {
+      play: resume, pause, previoustrack: () => skipVerse(-1), nexttrack: () => skipVerse(1),
+      seekto: (d) => { if (Number.isFinite(d?.seekTime)) seek(d.seekTime) },
+    }
     const setActions = (on) => {
       for (const [action, handler] of Object.entries(actions)) {
         try { session?.setActionHandler(action, on ? handler : null) } catch { /* unsupported action */ }
       }
     }
     setActions(true)
-    const onOnline = () => { if (L.controller && L.waiting) retry() }
+    const onOnline = () => { if (L.failed) retry() }
     window.addEventListener('online', onOnline)
     if (autoStart) {
       begin()
@@ -500,7 +556,9 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
     }
     return () => {
       audio.removeEventListener('timeupdate', onTime)
-      audio.removeEventListener('loadedmetadata', onMeta)
+      audio.removeEventListener('progress', onProgress)
+      audio.removeEventListener('waiting', onWaiting)
+      audio.removeEventListener('playing', onPlaying)
       audio.removeEventListener('ended', onEnded)
       window.removeEventListener('online', onOnline)
       setActions(false)
@@ -508,23 +566,8 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
       L.verse = null
       L.props.onActiveVerse?.(null)
     }
-    // plan/translation are fixed for this instance: the parent remounts it per chapter.
+    // doc/translation are fixed for this instance: the parent remounts it per chapter.
   }, [])
-
-  // Rate-limit countdown; the queue resumes by itself when it reaches zero.
-  useEffect(() => {
-    if (!cooldownUntil) return
-    const id = setInterval(() => {
-      setNow(Date.now())
-      if (Date.now() < L.cooldownUntil) return
-      clearInterval(id)
-      L.cooldownUntil = 0
-      setCooldownUntil(0)
-      if (L.waiting) setStatus(L.played ? 'buffering' : 'preparing')
-      pump()
-    }, 1000)
-    return () => clearInterval(id)
-  }, [cooldownUntil])
 
   // The mini player shows once the card has scrolled out of view.
   useEffect(() => {
@@ -535,40 +578,34 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
     return () => io.disconnect()
   }, [])
 
-  if (!plan.length) return null
+  if (!doc.text) return null
 
-  const { starts, total } = timeline(plan, L.durations)
-  const exact = plan.every((_, i) => L.durations[i])
-  const elapsed = (starts[index] ?? 0) + time
-  let edge = index
-  while (edge < plan.length && L.ready.has(edge)) edge += 1
-  const buffered = L.controller ? (edge >= plan.length ? total : starts[edge]) : 0
   const started = status !== 'idle' && status !== 'ended'
-  const cooldownLeft = Math.max(0, Math.ceil((cooldownUntil - now) / 1000))
   const verseLabel = verse == null ? '' : verses.find((v) => v.verse === verse)?.label ?? String(verse)
-  const minutes = Math.max(1, Math.round(total / 60 / speed))
-  const line = status === 'preparing' ? 'Preparing voice…'
-    : status === 'buffering' ? 'Loading the next part…'
-      : status === 'cooldown' ? `The AI voice is busy, retrying in ${cooldownLeft}s…`
-        : status === 'offline' || status === 'error' ? message
-          : status === 'ended' ? 'Chapter finished'
-            : status === 'idle' ? `AI voice · about ${minutes} min`
-              : `${status === 'paused' ? 'Paused · ' : ''}Verse ${verseLabel}`
-  const notice = status === 'offline' || status === 'error' || status === 'cooldown'
+  const minutes = Math.max(1, Math.round(estimate / 60 / speed))
+  const providerName = voiceProvider(voice) === 'elevenlabs' ? 'ElevenLabs' : 'Gemini'
+  const line = status === 'preparing' ? 'Preparing chapter…'
+    : status === 'buffering' ? 'Loading audio…'
+      : status === 'offline' || status === 'error' ? message
+        : status === 'ended' ? 'Chapter finished'
+          : status === 'idle' ? `${providerName} voice · about ${minutes} min`
+            : `${status === 'paused' ? 'Paused · ' : ''}Verse ${verseLabel}`
+  const problem = status === 'offline' || status === 'error'
+  const loadedTo = exact || device ? total : buffered
 
   const mini = started && !cardVisible && !hideMini && createPortal(
-    <div className="tts-mini animate-rise fixed z-sticky flex items-center gap-2 overflow-hidden rounded-2xl border border-line bg-surface p-1.5 pr-1 shadow-lift">
+    <div className="tts-mini animate-rise fixed z-sticky flex items-center gap-2 overflow-hidden rounded-2xl border border-line bg-surface p-1.5 pr-1 shadow-lift motion-reduce:animate-none">
       <PlayButton status={status} onClick={toggle} size="sm" />
       <button type="button" onClick={() => cardRef.current?.scrollIntoView({ block: 'center' })} className="min-h-11 min-w-0 flex-1 text-left" aria-label="Show the full player">
         <span className="block truncate text-sm font-semibold">{book} {chapter}{verseLabel ? `:${verseLabel}` : ''}</span>
         <span className="block truncate text-xs text-muted">{line}</span>
       </button>
       <button type="button" onClick={() => skipVerse(1)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-muted" aria-label="Next verse"><SkipForwardIcon width={18} height={18} /></button>
-      <div aria-hidden="true" className="absolute inset-x-0 bottom-0 h-0.5 bg-raised"><div className="h-full bg-brand-strong dark:bg-brand" style={{ width: pct(elapsed, total) }} /></div>
+      <div aria-hidden="true" className="absolute inset-x-0 bottom-0 h-0.5 bg-raised"><div className="h-full bg-brand-strong dark:bg-brand" style={{ width: pct(time, total) }} /></div>
     </div>, document.body)
 
   return <section ref={cardRef} aria-label={`Listen to ${book} ${chapter}`} className="mb-7 rounded-2xl border border-line bg-surface p-4 shadow-soft">
-    <p className="sr-only" role="status" aria-live="polite">{notice && status !== 'cooldown' ? message : ANNOUNCE[status] ?? ''}</p>
+    <p className="sr-only" role="status" aria-live="polite">{problem ? message : ANNOUNCE[status] ?? ''}</p>
     <div className="flex items-center gap-3">
       <PlayButton status={status} onClick={toggle} />
       <div className="min-w-0 flex-1">
@@ -582,37 +619,36 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
 
     {started && <div className="mt-3">
       {status === 'preparing'
-        ? <div className="flex h-11 items-center" role="progressbar" aria-label="Preparing voice" aria-valuetext="Preparing voice">
-          {/* ponytail: estimated fill (synthesis gives no progress); it eases toward 92% and the real audio replaces it. */}
+        ? <div className="flex h-11 items-center" role="progressbar" aria-label="Preparing chapter" aria-valuetext="Preparing chapter">
+          {/* ponytail: estimated fill (synthesis gives no progress); it eases toward 92% and the audio replaces it. */}
           <div className="h-1.5 w-full overflow-hidden rounded-full bg-raised">
-            <div className="tts-prep h-full origin-left rounded-full bg-brand-strong dark:bg-brand" style={{ '--tts-prep': `${Math.max(3, plan[index].text.length / 40)}s` }} />
+            <div className="tts-prep h-full origin-left rounded-full bg-brand-strong dark:bg-brand" style={{ '--tts-prep': `${voiceProvider(voice) === 'gemini' ? Math.max(6, doc.text.length / 250) : 3}s` }} />
           </div>
         </div>
         : <div className="relative h-11 rounded-full focus-within:ring-2 focus-within:ring-brand/50">
           <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 overflow-hidden rounded-full bg-raised">
-            <div className="absolute inset-y-0 left-0 bg-brand/25 transition-[width] duration-300" style={{ width: pct(buffered, total) }} />
-            <div className="absolute inset-y-0 left-0 bg-brand-strong dark:bg-brand" style={{ width: pct(elapsed, total) }} />
+            <div className="absolute inset-y-0 left-0 bg-brand/25 transition-[width] duration-300 motion-reduce:transition-none" style={{ width: pct(loadedTo, total) }} />
+            <div className="absolute inset-y-0 left-0 bg-brand-strong dark:bg-brand" style={{ width: pct(time, total) }} />
           </div>
-          <div aria-hidden="true" className="pointer-events-none absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand-strong shadow-soft dark:bg-brand" style={{ left: pct(elapsed, total) }} />
-          <input type="range" min={0} max={Math.max(1, Math.round(total))} step={1} value={Math.min(Math.round(elapsed), Math.max(1, Math.round(total)))}
-            onChange={(e) => seek(Number(e.target.value))} aria-label="Chapter position" aria-valuetext={`${clock(elapsed)} of ${exact ? '' : 'about '}${clock(total)}`}
+          <div aria-hidden="true" className="pointer-events-none absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand-strong shadow-soft dark:bg-brand" style={{ left: pct(time, total) }} />
+          <input type="range" min={0} max={Math.max(1, Math.round(total))} step={1} value={Math.min(Math.round(time), Math.max(1, Math.round(total)))}
+            onChange={(e) => seek(Number(e.target.value))} aria-label="Chapter position" aria-valuetext={`${clock(time)} of ${exact ? '' : 'about '}${clock(total)}`}
             className="absolute inset-0 h-full w-full cursor-pointer opacity-0" />
         </div>}
       <div className="flex items-center justify-between text-[0.7rem] tabular-nums text-muted">
-        <span>{clock(elapsed)}</span>
-        {L.ready.size < plan.length && <span>{L.ready.size} of {plan.length} ready</span>}
+        <span>{clock(time)}</span>
         <span>{exact ? '' : '~'}{clock(total)}</span>
       </div>
     </div>}
 
-    {notice && <div className="mt-3 flex items-center justify-between gap-3 rounded-xl bg-raised px-3 py-2">
+    {problem && <div className="mt-3 flex items-center justify-between gap-3 rounded-xl bg-raised px-3 py-2">
       <p className="text-xs leading-relaxed text-muted">{line}</p>
-      {status !== 'cooldown' && <button type="button" onClick={retry} className="btn-outline min-h-11 shrink-0">Retry</button>}
+      <button type="button" onClick={retry} className="btn-outline min-h-11 shrink-0">Retry</button>
     </div>}
 
-    {deviceNote && started && !notice && <div className="mt-3 flex items-center justify-between gap-3 rounded-xl bg-raised px-3 py-2" role="status">
-      <p className="text-xs leading-relaxed text-muted">{DEVICE_NOTE[deviceNote]}</p>
-      <button type="button" onClick={retryAi} className="btn-outline min-h-11 shrink-0">Try AI voice again</button>
+    {note && started && !problem && <div className="mt-3 flex items-center justify-between gap-3 rounded-xl bg-raised px-3 py-2" role="status">
+      <p className="text-xs leading-relaxed text-muted">{note}</p>
+      {device && <button type="button" onClick={retryAi} className="btn-outline min-h-11 shrink-0">Try again</button>}
     </div>}
 
     {(started || status === 'ended') && <div className="mt-2 flex flex-wrap items-center justify-between gap-1">
@@ -624,8 +660,8 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
       {onNextChapter && <div className="flex items-center gap-1">
         {status === 'ended' && <button type="button" onClick={onNextChapter} className="btn-outline min-h-11">Next chapter</button>}
         <button type="button" role="switch" aria-checked={autoNext} onClick={toggleAutoNext} className="flex min-h-11 items-center gap-2 rounded-full px-2 text-xs font-semibold text-muted">
-          <span aria-hidden="true" className={`relative h-5 w-9 rounded-full transition-colors duration-150 ${autoNext ? 'bg-brand-strong dark:bg-brand' : 'bg-line'}`}>
-            <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-surface shadow-soft transition-transform duration-150 ${autoNext ? 'translate-x-[1.125rem]' : 'translate-x-0.5'}`} />
+          <span aria-hidden="true" className={`relative h-5 w-9 rounded-full transition-colors duration-150 motion-reduce:transition-none ${autoNext ? 'bg-brand-strong dark:bg-brand' : 'bg-line'}`}>
+            <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-surface shadow-soft transition-transform duration-150 motion-reduce:transition-none ${autoNext ? 'translate-x-[1.125rem]' : 'translate-x-0.5'}`} />
           </span>
           Auto-play next
         </button>
