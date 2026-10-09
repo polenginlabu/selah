@@ -7,33 +7,41 @@
 //
 // The client sends the text because the chapter it is reading is not available
 // server-side. That makes this a signed-in, rate-limited, length-capped TTS
-// proxy restricted to the AUDIO_TRANSLATIONS allow-list — nothing more.
+// proxy restricted to the AUDIO_TRANSLATIONS, VOICES and STYLES allow-lists.
+//
+// Every generated chunk is stored in the private `bible-audio` bucket
+// (supabase/migrations/20261012_bible_audio_cache.sql), keyed by model, voice,
+// style, translation and a hash of the prompt, so each chunk is generated once
+// for everyone. Cache hits cost no Gemini call and no rate-limit slot. Storage
+// is best-effort: a failed read is a miss, a failed write is only logged.
 //
 // Secrets (never in the client):
 //   supabase secrets set GEMINI_API_KEY=...
-//   optional: GEMINI_TTS_MODEL, GEMINI_TTS_VOICE, TTS_RATE_LIMIT
+//   optional: GEMINI_TTS_MODEL, TTS_RATE_LIMIT
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { AUDIO_TRANSLATIONS } from '../_shared/bible.js'
 import { pcmToWav } from '../_shared/wav.js'
+import { DEFAULT_STYLE, DEFAULT_VOICE, audioObjectPath, buildTtsPrompt, isStyle, isVoice } from '../_shared/ttsConfig.js'
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? ''
 const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
 const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') ?? ''
 const MODEL = Deno.env.get('GEMINI_TTS_MODEL') ?? 'gemini-2.5-flash-preview-tts'
-const VOICE = Deno.env.get('GEMINI_TTS_VOICE') ?? 'Kore'
+const BUCKET = 'bible-audio'
 // A DB read must never be able to uncap read-aloud, so this is a constant.
-// The client starts with a small chunk and prefetches ahead, so a chapter costs
-// a few more requests than one-big-chunk-at-a-time did.
-const RATE_LIMIT_PER_MINUTE = Number(Deno.env.get('TTS_RATE_LIMIT') ?? '30')
+// The client prefetches a whole chapter in ~280-char chunks; cache hits do not count.
+const RATE_LIMIT_PER_MINUTE = Number(Deno.env.get('TTS_RATE_LIMIT') ?? '60')
 // Keep in sync with TTS_MAX_CHUNK_CHARS in src/lib/bibleTts.js.
 const MAX_CHUNK_CHARS = 1200
+// The body is read before the rate limit (so cache hits are free); cap it.
+const MAX_BODY_BYTES = 16_384
 // Under the Edge Function wall clock so we answer before the platform kills us.
 const UPSTREAM_TIMEOUT_MS = 45_000
 
 const CORS = {
   'Access-Control-Allow-Origin': Deno.env.get('CHAT_ALLOWED_ORIGIN') ?? '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Expose-Headers': 'Retry-After',
+  'Access-Control-Expose-Headers': 'Retry-After, X-Audio-Cache',
 }
 
 // Reflect the preflight's requested headers, as in bible-chat.
@@ -86,7 +94,51 @@ Deno.serve(async (req) => {
   const user = userData?.user
   if (userError || !user) return json({ error: 'Session expired — sign in again.' }, 401)
 
-  // --- Rate limit BEFORE reading the body ----------------------------------
+  // --- Validate (signed-in callers only, body size capped) ------------------
+  let body: Record<string, unknown>
+  if (Number(req.headers.get('content-length') ?? 0) > MAX_BODY_BYTES) {
+    return json({ error: 'Malformed request.' }, 413)
+  }
+  try {
+    const raw = await req.text()
+    if (new TextEncoder().encode(raw).length > MAX_BODY_BYTES) return json({ error: 'Malformed request.' }, 413)
+    body = JSON.parse(raw)
+  } catch {
+    return json({ error: 'Malformed request.' }, 400)
+  }
+  if (!body || typeof body !== 'object') return json({ error: 'Malformed request.' }, 400)
+
+  const translation = body.translation
+  if (typeof translation !== 'string' || !AUDIO_TRANSLATIONS.includes(translation)) {
+    return json({ error: 'Audio is not available for this translation.' }, 400)
+  }
+  if (typeof body.text !== 'string') return json({ error: 'Nothing to read.' }, 400)
+  const text = body.text.trim()
+  if (!text) return json({ error: 'Nothing to read.' }, 400)
+  if (text.length > MAX_CHUNK_CHARS) {
+    return json({ error: `Keep each part under ${MAX_CHUNK_CHARS} characters.` }, 400)
+  }
+  // Missing means the default (older clients send neither); anything else must be on the list.
+  const voice = body.voice ?? DEFAULT_VOICE
+  if (!isVoice(voice)) return json({ error: 'That voice is not available.' }, 400)
+  const style = body.style ?? DEFAULT_STYLE
+  if (!isStyle(style)) return json({ error: 'That reading style is not available.' }, 400)
+
+  // --- Shared audio cache --------------------------------------------------
+  const path = await audioObjectPath({ model: MODEL, voice, style, translation, text })
+  const bucket = admin.storage.from(BUCKET)
+  try {
+    const { data: cached, error } = await bucket.download(path)
+    if (!error && cached && cached.size > 44) {
+      return new Response(cached, {
+        headers: { ...CORS, 'Content-Type': 'audio/wav', 'Cache-Control': 'no-store', 'X-Audio-Cache': 'hit' },
+      })
+    }
+  } catch (err) {
+    console.error('bible-tts: cache read failed', sanitizeUpstreamDetail(String(err)))
+  }
+
+  // --- Rate limit (only generation costs a slot) ---------------------------
   const { data: allowed, error: limitError } = await admin.rpc('tts_rate_limit_hit', {
     p_user_id: user.id,
     p_max_per_minute: RATE_LIMIT_PER_MINUTE,
@@ -104,26 +156,6 @@ Deno.serve(async (req) => {
     )
   }
 
-  // --- Validate ------------------------------------------------------------
-  let body: Record<string, unknown>
-  try {
-    body = await req.json()
-  } catch {
-    return json({ error: 'Malformed request.' }, 400)
-  }
-  if (!body || typeof body !== 'object') return json({ error: 'Malformed request.' }, 400)
-
-  const translation = body.translation
-  if (typeof translation !== 'string' || !AUDIO_TRANSLATIONS.includes(translation)) {
-    return json({ error: 'Audio is not available for this translation.' }, 400)
-  }
-  if (typeof body.text !== 'string') return json({ error: 'Nothing to read.' }, 400)
-  const text = body.text.trim()
-  if (!text) return json({ error: 'Nothing to read.' }, 400)
-  if (text.length > MAX_CHUNK_CHARS) {
-    return json({ error: `Keep each part under ${MAX_CHUNK_CHARS} characters.` }, 400)
-  }
-
   // --- Gemini TTS ----------------------------------------------------------
   let upstream: Response
   try {
@@ -133,10 +165,10 @@ Deno.serve(async (req) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: `Read this Scripture aloud in a calm, reverent, unhurried voice:\n\n${text}` }] }],
+          contents: [{ parts: [{ text: buildTtsPrompt(style, text) }] }],
           generationConfig: {
             responseModalities: ['AUDIO'],
-            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } } },
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
           },
         }),
         signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
@@ -175,7 +207,18 @@ Deno.serve(async (req) => {
     return unavailable()
   }
 
-  return new Response(pcmToWav(pcm, { sampleRate }), {
-    headers: { ...CORS, 'Content-Type': 'audio/wav', 'Cache-Control': 'no-store' },
+  const wav = pcmToWav(pcm, { sampleRate })
+  // Store after responding when the runtime allows it. Two users generating the
+  // same chunk at once both store it; the later upsert wins, same bytes either way.
+  const store = bucket.upload(path, wav, { contentType: 'audio/wav', upsert: true })
+    .then(({ error }) => { if (error) console.error('bible-tts: cache write failed', sanitizeUpstreamDetail(error.message)) })
+    .catch((err) => console.error('bible-tts: cache write failed', sanitizeUpstreamDetail(String(err))))
+  // deno-lint-ignore no-explicit-any
+  const runtime = (globalThis as any).EdgeRuntime
+  if (typeof runtime?.waitUntil === 'function') runtime.waitUntil(store)
+  else await store
+
+  return new Response(wav, {
+    headers: { ...CORS, 'Content-Type': 'audio/wav', 'Cache-Control': 'no-store', 'X-Audio-Cache': 'miss' },
   })
 })

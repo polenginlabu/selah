@@ -1,6 +1,7 @@
 // Client half of Bible read-aloud. No secrets here, ever — this ships to the
 // browser. The bible-tts Edge Function holds the Gemini key and verifies the
 // caller's Supabase JWT.
+import { DEFAULT_STYLE, DEFAULT_VOICE, buildTtsPrompt } from '../../supabase/functions/_shared/ttsConfig.js'
 
 // Keep in sync with MAX_CHUNK_CHARS in supabase/functions/bible-tts/index.ts.
 export const TTS_MAX_CHUNK_CHARS = 1200
@@ -40,22 +41,22 @@ export function chunkVerses(verses, maxChars = TTS_MAX_CHUNK_CHARS) {
   return chunks
 }
 
-// The first chunk is small so audio starts after a few seconds of synthesis;
-// each later chunk doubles up to TTS_CHUNK_CHARS, so the next one is ready
-// before the current one finishes playing while a chapter stays few requests.
-export const TTS_FIRST_CHUNK_CHARS = 220
-export const TTS_CHUNK_CHARS = 900
-// Changing the server voice (GEMINI_TTS_VOICE) needs a bump here so cached audio is not reused.
-export const TTS_VOICE = 'Kore'
+// Small, roughly equal chunks: each takes a few seconds to synthesise, so the
+// whole chapter can be fetched in parallel from the moment play is pressed and
+// playback never outruns it. The first is smaller still so audio starts sooner.
+export const TTS_FIRST_CHUNK_CHARS = 160
+export const TTS_CHUNK_CHARS = 280
+// Requests in flight at once while prefetching a chapter.
+export const TTS_MAX_INFLIGHT = 5
 // Calm read-aloud is about 150 words a minute, roughly 14 characters a second.
 export const TTS_CHARS_PER_SEC = 14
 
 /**
  * Plans a chapter as chunks that remember their verses. Returns
  * [{ text, marks: [{ verse, at }] }], where `at` is the character offset in
- * `text` where that verse (row.verse) starts. Chunk i is at most
- * min(maxChars, firstMax * 2^i) characters; verses are only split when they
- * cannot fit a chunk by themselves.
+ * `text` where that verse (row.verse) starts. The first chunk is at most
+ * firstMax characters and the rest at most maxChars; verses are only split
+ * when they cannot fit a chunk by themselves.
  */
 export function planChunks(verses, { firstMax = TTS_FIRST_CHUNK_CHARS, maxChars = TTS_CHUNK_CHARS } = {}) {
   const queue = []
@@ -67,7 +68,7 @@ export function planChunks(verses, { firstMax = TTS_FIRST_CHUNK_CHARS, maxChars 
   let current = null
   for (let i = 0; i < queue.length; i += 1) {
     const part = queue[i]
-    const limit = Math.min(maxChars, firstMax * 2 ** chunks.length)
+    const limit = chunks.length ? maxChars : Math.min(maxChars, firstMax)
     if (current && current.text.length + 1 + part.text.length <= limit) {
       if (current.marks.at(-1).verse !== part.verse) current.marks.push({ verse: part.verse, at: current.text.length + 1 })
       current.text += ` ${part.text}`
@@ -96,21 +97,28 @@ function hash(text) {
   return (h >>> 0).toString(36)
 }
 
-/** Cache key for one chunk's audio. The text hash keeps a re-chunked or edited chapter from replaying stale audio. */
-export function chunkKey({ translation, book, chapter, text, voice = TTS_VOICE }) {
-  return `${voice}/${translation}/${book}/${chapter}/${text.length}-${hash(text)}`
+/**
+ * Cache key for one chunk's audio. Hashing the full prompt (style instruction
+ * + text) means a re-chunked chapter or a reworded style never replays stale
+ * audio. The server model is not known here; its own cache keys include it.
+ */
+export function chunkKey({ translation, book, chapter, text, voice = DEFAULT_VOICE, style = DEFAULT_STYLE }) {
+  return `${voice}/${style}/${translation}/${book}/${chapter}/${text.length}-${hash(buildTtsPrompt(style, text))}`
 }
 
 /**
- * Which chunk indices to start fetching now: the playing chunk and up to
- * `lookahead` after it, skipping ready and in-flight ones, never more than
- * `maxInflight` at once, and nothing during a rate-limit cooldown.
+ * Which chunk indices to start fetching now: the whole chapter in playback
+ * order from the cursor to the end, then the chunks before it, skipping ready
+ * and in-flight ones, never more than `maxInflight` at once, and nothing
+ * during a rate-limit cooldown.
  */
-export function nextToFetch({ total, cursor, ready, inflight, lookahead = 2, maxInflight = 2, cooldownUntil = 0, now = Date.now() }) {
+export function nextToFetch({ total, cursor, ready, inflight, maxInflight = TTS_MAX_INFLIGHT, cooldownUntil = 0, now = Date.now() }) {
   if (now < cooldownUntil) return []
   const start = []
-  for (let i = Math.max(0, cursor); i < Math.min(total, cursor + lookahead + 1); i += 1) {
+  const from = Math.min(Math.max(0, cursor), Math.max(0, total - 1))
+  for (let n = 0; n < total; n += 1) {
     if (inflight.size + start.length >= maxInflight) break
+    const i = (from + n) % total
     if (!ready.has(i) && !inflight.has(i)) start.push(i)
   }
   return start
@@ -174,18 +182,18 @@ function ttsError(message, status, retryAfterSec) {
  * Fetches one chunk as a WAV Blob. Throws an Error carrying `status` (and
  * `retryAfterSec` on 429); a transient 502/503 is retried once.
  */
-export async function fetchTtsChunk({ translation, text, signal }) {
+export async function fetchTtsChunk(args) {
   try {
-    return await requestTtsChunk({ translation, text, signal })
+    return await requestTtsChunk(args)
   } catch (err) {
     if (err?.status !== 502 && err?.status !== 503) throw err
     await new Promise((resolve) => setTimeout(resolve, 800))
-    if (signal?.aborted) throw err
-    return requestTtsChunk({ translation, text, signal })
+    if (args.signal?.aborted) throw err
+    return requestTtsChunk(args)
   }
 }
 
-async function requestTtsChunk({ translation, text, signal }) {
+async function requestTtsChunk({ translation, text, voice = DEFAULT_VOICE, style = DEFAULT_STYLE, signal }) {
   // Imported lazily so chunkVerses stays importable under node --test.
   const { supabase } = await import('./supabase')
   const {
@@ -199,7 +207,7 @@ async function requestTtsChunk({ translation, text, signal }) {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${session.access_token}`,
     },
-    body: JSON.stringify({ translation, text }),
+    body: JSON.stringify({ translation, text, voice, style }),
     signal,
   })
   if (res.ok) return res.blob()

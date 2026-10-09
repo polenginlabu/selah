@@ -5,7 +5,7 @@
 // Run: npm run card:test
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { chunkVerses, planChunks, chunkKey, nextToFetch, wavDurationSec, timeline, locateTime, verseAt, verseStart, planVerses, TTS_MAX_CHUNK_CHARS, TTS_CHARS_PER_SEC } from './bibleTts.js'
+import { chunkVerses, planChunks, chunkKey, nextToFetch, wavDurationSec, timeline, locateTime, verseAt, verseStart, planVerses, TTS_MAX_CHUNK_CHARS, TTS_CHARS_PER_SEC, TTS_CHUNK_CHARS, TTS_FIRST_CHUNK_CHARS, TTS_MAX_INFLIGHT } from './bibleTts.js'
 import { AUDIO_TRANSLATIONS, API_BIBLES } from '../../supabase/functions/_shared/bible.js'
 
 const words = (s) => s.split(/\s+/).filter(Boolean)
@@ -20,13 +20,16 @@ test('audio is offered for every translation the reader supports', () => {
 const sample = (n, text = (i) => `Verse ${i} says the Lord is my shepherd and I shall not want.`) =>
   Array.from({ length: n }, (_, i) => ({ verse: i + 1, text: text(i + 1) }))
 
-test('planChunks: the first chunk is small and ends on a verse boundary', () => {
-  const plan = planChunks(sample(30), { firstMax: 220, maxChars: 900 })
-  assert.ok(plan[0].text.length <= 220)
+test('planChunks: a small first chunk, then roughly equal whole-verse chunks', () => {
+  const plan = planChunks(sample(30))
+  assert.ok(plan[0].text.length <= TTS_FIRST_CHUNK_CHARS)
   assert.ok(plan[0].marks.length >= 2, 'packs whole short verses into the first chunk')
-  // Later chunks grow (doubling) up to the cap, so few requests per chapter.
-  assert.ok(plan[1].text.length > plan[0].text.length)
-  for (const [i, c] of plan.entries()) assert.ok(c.text.length <= Math.min(900, 220 * 2 ** i), `chunk ${i} too long`)
+  // Every later chunk is near the cap rather than growing, so each is quick to synthesise.
+  for (const c of plan.slice(1, -1)) assert.ok(c.text.length <= TTS_CHUNK_CHARS && c.text.length > TTS_CHUNK_CHARS - 70, `chunk of ${c.text.length}`)
+  assert.ok(plan.at(-1).text.length <= TTS_CHUNK_CHARS)
+  // Whole verses: every chunk starts at a verse start.
+  for (const c of plan) assert.equal(c.marks[0].at, 0)
+  for (const c of plan) assert.ok(c.text.startsWith(`Verse ${c.marks[0].verse} `))
 })
 
 test('planChunks: a long first verse is split so audio still starts quickly', () => {
@@ -43,7 +46,7 @@ test('planChunks: keeps every word in order, no chunk over the hard cap, marks p
   verses[50].text = Array.from({ length: 400 }, (_, i) => `w${i}`).join(' ')
   verses[3].text = '   '
   const plan = planChunks(verses)
-  for (const c of plan) assert.ok(c.text && c.text.length <= TTS_MAX_CHUNK_CHARS)
+  for (const c of plan) assert.ok(c.text && c.text.length <= TTS_CHUNK_CHARS && TTS_CHUNK_CHARS <= TTS_MAX_CHUNK_CHARS)
   assert.deepEqual(words(plan.map((c) => c.text).join(' ')), words(verses.map((v) => v.text).join(' ')))
   for (const c of plan) for (const m of c.marks) {
     if (m.verse !== 51) assert.ok(c.text.slice(m.at).startsWith(`Verse ${m.verse} `), `mark ${m.verse}`)
@@ -60,26 +63,42 @@ test('planChunks: bridged rows keep their row verse', () => {
 })
 
 test('chunkKey is deterministic and changes with every field', () => {
-  const base = { translation: 'nivuk', book: 'John', chapter: 3, text: 'For God so loved the world', voice: 'Kore' }
+  const base = { translation: 'nivuk', book: 'John', chapter: 3, text: 'For God so loved the world', voice: 'Kore', style: 'narrator' }
   assert.equal(chunkKey(base), chunkKey({ ...base }))
-  for (const change of [{ translation: 'msg' }, { book: 'Luke' }, { chapter: 4 }, { text: 'For God so loved the world.' }, { voice: 'Puck' }]) {
+  assert.equal(chunkKey({ translation: 'nivuk', book: 'John', chapter: 3, text: base.text }), chunkKey(base), 'defaults are Kore + narrator')
+  for (const change of [{ translation: 'msg' }, { book: 'Luke' }, { chapter: 4 }, { text: 'For God so loved the world.' }, { voice: 'Charon' }, { style: 'gentle' }]) {
     assert.notEqual(chunkKey({ ...base, ...change }), chunkKey(base), JSON.stringify(change))
   }
 })
 
-test('nextToFetch: looks ahead, caps in-flight requests, skips ready ones', () => {
+test('nextToFetch: fetches the whole chapter in playback order, capped in flight', () => {
   const none = new Set()
-  assert.deepEqual(nextToFetch({ total: 5, cursor: 0, ready: none, inflight: none }), [0, 1])
-  assert.deepEqual(nextToFetch({ total: 5, cursor: 0, ready: new Set([0]), inflight: none }), [1, 2])
-  assert.deepEqual(nextToFetch({ total: 5, cursor: 0, ready: new Set([0]), inflight: new Set([1]) }), [2])
-  assert.deepEqual(nextToFetch({ total: 5, cursor: 0, ready: none, inflight: new Set([0, 1]) }), [])
-  assert.deepEqual(nextToFetch({ total: 5, cursor: 3, ready: new Set([3]), inflight: none }), [4], 'stops at the end')
-  assert.deepEqual(nextToFetch({ total: 5, cursor: 1, ready: new Set([0, 1, 2, 3]), inflight: none }), [], 'nothing past the lookahead')
-  assert.deepEqual(nextToFetch({ total: 1, cursor: 0, ready: none, inflight: none, lookahead: 2 }), [0])
+  assert.deepEqual(nextToFetch({ total: 20, cursor: 0, ready: none, inflight: none }), [0, 1, 2, 3, 4])
+  assert.equal(TTS_MAX_INFLIGHT, 5)
+  assert.deepEqual(nextToFetch({ total: 20, cursor: 0, ready: new Set([0, 1]), inflight: new Set([2]) }), [3, 4, 5, 6])
+  assert.deepEqual(nextToFetch({ total: 20, cursor: 0, ready: none, inflight: new Set([0, 1, 2, 3, 4]) }), [])
+  // Far ahead of the cursor is fetched too: no lookahead gate.
+  assert.deepEqual(nextToFetch({ total: 20, cursor: 0, ready: new Set(Array.from({ length: 17 }, (_, i) => i)), inflight: none }), [17, 18, 19])
+  assert.deepEqual(nextToFetch({ total: 3, cursor: 0, ready: none, inflight: none }), [0, 1, 2])
+  assert.deepEqual(nextToFetch({ total: 20, cursor: 0, ready: none, inflight: none, maxInflight: 2 }), [0, 1])
+  assert.deepEqual(nextToFetch({ total: 0, cursor: 0, ready: none, inflight: none }), [])
+})
+
+test('nextToFetch: after a seek, the cursor and what follows come first, then wraps', () => {
+  const none = new Set()
+  assert.deepEqual(nextToFetch({ total: 10, cursor: 7, ready: none, inflight: none }), [7, 8, 9, 0, 1])
+  assert.deepEqual(nextToFetch({ total: 10, cursor: 7, ready: new Set([7, 8, 9, 0]), inflight: none }), [1, 2, 3, 4, 5])
+  assert.deepEqual(nextToFetch({ total: 5, cursor: 2, ready: new Set([0, 1, 2, 3, 4]), inflight: none }), [], 'all ready')
+})
+
+test('nextToFetch: an out-of-range cursor is clamped, not skipped past', () => {
+  const none = new Set()
+  assert.deepEqual(nextToFetch({ total: 4, cursor: 99, ready: none, inflight: none }), [3, 0, 1, 2])
+  assert.deepEqual(nextToFetch({ total: 4, cursor: -3, ready: none, inflight: none }), [0, 1, 2, 3])
 })
 
 test('nextToFetch: pauses during a rate-limit cooldown and resumes after', () => {
-  const args = { total: 5, cursor: 0, ready: new Set(), inflight: new Set(), cooldownUntil: 10_000 }
+  const args = { total: 5, cursor: 0, ready: new Set(), inflight: new Set(), cooldownUntil: 10_000, maxInflight: 2 }
   assert.deepEqual(nextToFetch({ ...args, now: 9_999 }), [])
   assert.deepEqual(nextToFetch({ ...args, now: 10_000 }), [0, 1])
 })

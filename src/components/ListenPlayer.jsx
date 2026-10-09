@@ -4,6 +4,8 @@ import { PlayIcon, PauseIcon, SkipBackIcon, SkipForwardIcon, XIcon } from '../ic
 import { TTS_CHARS_PER_SEC, chunkKey, fetchTtsChunk, locateTime, nextToFetch, planChunks, planVerses, timeline, verseAt, verseStart, wavDurationSec } from '../lib/bibleTts'
 import { getTtsAudio, putTtsAudio } from '../lib/ttsCache'
 import { pcmToWav } from '../../supabase/functions/_shared/wav.js'
+import { DEFAULT_STYLE, DEFAULT_VOICE, isStyle, isVoice } from '../../supabase/functions/_shared/ttsConfig.js'
+import ListenVoiceSheet from './ListenVoiceSheet'
 
 const SPEEDS = [0.75, 1, 1.25, 1.5]
 const WAITING = new Set(['preparing', 'buffering', 'cooldown'])
@@ -58,12 +60,12 @@ function PlayButton({ status, onClick, size = 'lg' }) {
 // Read-aloud for one chapter. The parent keys this on chapter + translation, so
 // navigating unmounts it, which aborts requests and stops playback.
 //
-// Speed: the first chunk is small (src/lib/bibleTts.js planChunks) so audio
-// starts after a few seconds, the next two chunks are fetched while it plays,
-// and every chunk is cached (src/lib/ttsCache.js) so replays make no request.
+// Speed: chunks are small (src/lib/bibleTts.js planChunks) so audio starts
+// after a few seconds, the whole chapter is fetched in parallel in playback
+// order from the moment play is pressed (nextToFetch), and every chunk is
+// cached here (src/lib/ttsCache.js) and on the server, so replays are instant.
 export default function ListenPlayer({ translation, book, chapter, verses, autoStart = false, onAutoStarted, onActiveVerse, onNextChapter, hideMini = false }) {
   const plan = useMemo(() => planChunks(verses), [verses])
-  const keys = useMemo(() => plan.map((c) => chunkKey({ translation, book, chapter, text: c.text })), [plan, translation, book, chapter])
   const order = useMemo(() => planVerses(plan), [plan])
   const [status, setStatus] = useState('idle') // idle | preparing | playing | paused | buffering | cooldown | offline | error | ended
   const [index, setIndex] = useState(0)
@@ -75,6 +77,9 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
   const [now, setNow] = useState(() => Date.now())
   const [speed, setSpeed] = useState(() => (SPEEDS.includes(Number(readPref('bible:ttsSpeed'))) ? Number(readPref('bible:ttsSpeed')) : 1))
   const [autoNext, setAutoNext] = useState(() => readPref('bible:ttsContinue') === 'true')
+  const [voice, setVoice] = useState(() => (isVoice(readPref('bible:ttsVoice')) ? readPref('bible:ttsVoice') : DEFAULT_VOICE))
+  const [style, setStyle] = useState(() => (isStyle(readPref('bible:ttsStyle')) ? readPref('bible:ttsStyle') : DEFAULT_STYLE))
+  const [voiceOpen, setVoiceOpen] = useState(false)
   const [cardVisible, setCardVisible] = useState(true)
   const cardRef = useRef(null)
   // Playback session state that event handlers and async fetches read. A new
@@ -85,6 +90,9 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
   L.props = { onActiveVerse, onNextChapter }
   L.speed = speed
   L.autoNext = autoNext
+  // Read at fetch time: the shared-element listeners keep first-render closures.
+  L.voice = voice
+  L.style = style
 
   const isLoaded = () => Boolean(L.url) && L.url !== silentUrl && !L.waiting
   const durationOf = (i) => L.durations[i] ?? plan[i].text.length / TTS_CHARS_PER_SEC
@@ -121,9 +129,10 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
 
   function load(i, controller) {
     L.inflight.add(i)
-    const key = keys[i]
+    const { voice, style } = L
+    const key = chunkKey({ translation, book, chapter, text: plan[i].text, voice, style })
     getTtsAudio(key)
-      .then((hit) => hit ?? fetchTtsChunk({ translation, text: plan[i].text, signal: controller.signal })
+      .then((hit) => hit ?? fetchTtsChunk({ translation, text: plan[i].text, voice, style, signal: controller.signal })
         .then((blob) => { putTtsAudio(key, blob); return blob }))
       .then((blob) => {
         if (L.controller !== controller) return
@@ -297,6 +306,21 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
     }
   }
 
+  // A new voice or style is new audio: stop, and the next play uses it.
+  function chooseVoice(next) {
+    if (next === voice) return
+    if (L.controller) stop()
+    setVoice(next)
+    savePref('bible:ttsVoice', next)
+  }
+
+  function chooseStyle(next) {
+    if (next === style) return
+    if (L.controller) stop()
+    setStyle(next)
+    savePref('bible:ttsStyle', next)
+  }
+
   function toggleAutoNext() {
     setAutoNext((v) => {
       savePref('bible:ttsContinue', !v)
@@ -349,7 +373,7 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
       L.verse = null
       L.props.onActiveVerse?.(null)
     }
-    // plan/keys/translation are fixed for this instance: the parent remounts it per chapter.
+    // plan/translation are fixed for this instance: the parent remounts it per chapter.
   }, [])
 
   // Rate-limit countdown; the queue resumes by itself when it reaches zero.
@@ -416,8 +440,10 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
         <p className="truncate font-display text-sm font-bold">{status === 'idle' ? `Listen to ${book} ${chapter}` : `${book} ${chapter}${verseLabel ? `:${verseLabel}` : ''}`}</p>
         <p aria-hidden="true" className="mt-0.5 truncate text-xs text-muted">{line}</p>
       </div>
+      <button type="button" onClick={() => setVoiceOpen(true)} aria-haspopup="dialog" className="flex h-11 min-w-11 max-w-[7rem] shrink-0 items-center justify-center rounded-full bg-raised px-3 text-xs font-bold text-ink" aria-label={`Voice ${voice}. Change voice and reading style`}><span className="truncate">{voice}</span></button>
       <button type="button" onClick={changeSpeed} className="flex h-11 min-w-11 shrink-0 items-center justify-center rounded-full bg-raised px-3 text-xs font-bold tabular-nums text-ink" aria-label={`Playback speed ${speed}×. Change speed`}>{speed}×</button>
     </div>
+    {voiceOpen && <ListenVoiceSheet voice={voice} style={style} playing={started} onPause={() => { if (status === 'playing' || WAITING.has(status)) pause() }} onVoice={chooseVoice} onStyle={chooseStyle} onClose={() => setVoiceOpen(false)} />}
 
     {started && <div className="mt-3">
       {status === 'preparing'
@@ -439,7 +465,7 @@ export default function ListenPlayer({ translation, book, chapter, verses, autoS
         </div>}
       <div className="flex items-center justify-between text-[0.7rem] tabular-nums text-muted">
         <span>{clock(elapsed)}</span>
-        {L.ready.size < plan.length && <span>Voice ready {L.ready.size}/{plan.length}</span>}
+        {L.ready.size < plan.length && <span>{L.ready.size} of {plan.length} ready</span>}
         <span>{exact ? '' : '~'}{clock(total)}</span>
       </div>
     </div>}
