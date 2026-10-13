@@ -9,12 +9,11 @@
 // Section 5 and section 11 of the SELAH brief only mean anything if the agent
 // can genuinely search, so this path lets it, and waits.
 
+import { setTimeout as delay } from 'node:timers/promises'
+
 const DEFAULT_BRIDGE_URL = process.env.BRIDGE_URL ?? 'http://127.0.0.1:4098'
-// big-pickle is outside the OpenCode workspace spending limit that silently
-// empties every other model once the monthly cap is hit, so it is the one that
-// actually runs. It researches properly (websearch + webfetch) but writes
-// shorter than the brief's 500-800 word target, which the validator catches.
-export const DEFAULT_MODEL = process.env.BRIDGE_MODEL ?? 'opencode/big-pickle'
+// The default is catalog-listed as free, but provider/workspace limits still apply.
+export const DEFAULT_MODEL = process.env.BRIDGE_MODEL?.trim() || 'opencode/big-pickle'
 
 const POLL_INTERVAL_MS = 2000
 // Research takes minutes, not seconds. The bridge's own job deadline is 10
@@ -22,6 +21,22 @@ const POLL_INTERVAL_MS = 2000
 const MAX_WAIT_MS = 9 * 60 * 1000
 
 export class BridgeError extends Error {}
+
+// Only a terminal job's explicit provider failure can authorize a fallback.
+// Network errors, tool failures and stalled/unfinished jobs must not be replayed.
+function agentFailure(raw, model, setting) {
+  const reason = String(raw)
+  let kind = null
+  if (/^OpenCode provider error:/i.test(reason)) {
+    if (/policy budget exceeded|(?:budget|quota|credits?) (?:exceeded|exhausted)|exceeded (?:your |the )?(?:current |monthly |daily )?quota\b|insufficient[_ ](?:quota|credits|(?:account )?funds|balance)|(?:monthly )?spend(?:ing)? limit (?:reached|exceeded)/i.test(reason)) kind = 'budget'
+    else if (/rate[_ -]?limit|too many requests|\b429\b/i.test(reason)) kind = 'rate_limit'
+    else if (/model (?:\S+ )?(?:is )?(?:unavailable|not found|not available)|service unavailable|overloaded|\b50[234]\b/i.test(reason)) kind = 'unavailable'
+  }
+  const guidance = kind === 'budget'
+    ? ` Check the provider/workspace allowance and billing policy for ${model}. A shared budget limit can block every model on that provider. Select an authorized model with ${setting} or --model.`
+    : ''
+  return Object.assign(new BridgeError(`The agent failed (${model}): ${reason}${guidance}`), { kind, model })
+}
 
 /**
  * Runs one prompt through the bridge and returns the agent's final text.
@@ -34,6 +49,7 @@ export class BridgeError extends Error {}
  * @param {number} [opts.maxWaitMs] must stay under the bridge's own 10-minute
  *   job deadline, so a slow run fails here with a clear message rather than
  *   racing the bridge for which of the two gives up first.
+ * @param {AbortSignal} [opts.signal] optional overall deadline across attempts
  */
 export async function runAgent({
   prompt,
@@ -41,23 +57,25 @@ export async function runAgent({
   bridgeUrl = DEFAULT_BRIDGE_URL,
   onProgress = () => {},
   maxWaitMs = MAX_WAIT_MS,
+  signal,
 }) {
   const base = bridgeUrl.replace(/\/+$/, '')
 
-  await assertBridgeReady(base)
+  await assertBridgeReady(base, signal)
   // A fresh session per run: the bridge keys off one global active session, so
   // without this a run inherits the previous run's conversation.
-  await post(base, '/api/sessions', { title: `selah-${Date.now()}` }).catch(() => {})
+  const session = await post(base, '/api/sessions', { title: `selah-${Date.now()}` }, signal)
+  if (!session?.id) throw new BridgeError('The bridge did not create a fresh session.')
 
-  const started = await post(base, '/api/chat/start', { message: prompt, model })
+  const started = await post(base, '/api/chat/start', { message: prompt, model }, signal)
   if (!started?.jobId) throw new BridgeError('The bridge accepted the prompt but returned no job id.')
 
   const deadline = Date.now() + maxWaitMs
   let lastPhase = ''
 
   while (Date.now() < deadline) {
-    await sleep(POLL_INTERVAL_MS)
-    const status = await get(base, `/api/chat/status/${encodeURIComponent(started.jobId)}`)
+    await delay(POLL_INTERVAL_MS, undefined, { signal })
+    const status = await get(base, `/api/chat/status/${encodeURIComponent(started.jobId)}`, signal)
 
     const phase = `${status.phase}: ${status.message}`
     if (phase !== lastPhase) {
@@ -66,7 +84,7 @@ export async function runAgent({
     }
 
     if (!status.done) continue
-    if (status.error) throw new BridgeError(`The agent failed: ${status.error}`)
+    if (status.error) throw agentFailure(status.error, model, 'BRIDGE_MODEL')
     if (!status.response?.trim()) throw new BridgeError('The agent finished but produced no output.')
     return status.response
   }
@@ -123,7 +141,7 @@ export async function runImageAgent({
     }
 
     if (!status.done) continue
-    if (status.error) throw new BridgeError(`The agent failed: ${status.error}`)
+    if (status.error) throw agentFailure(status.error, model, 'BACKGROUND_MODEL')
 
     const images = status.images ?? []
     if (!images.length) {
@@ -187,10 +205,10 @@ async function resolveImage(image, base) {
  * root path or a dead OpenCode looks identical to a slow model: you wait two
  * minutes and get "stalled without progress".
  */
-async function assertBridgeReady(base) {
+async function assertBridgeReady(base, signal) {
   let health
   try {
-    health = await get(base, '/api/health')
+    health = await get(base, '/api/health', signal)
   } catch (err) {
     throw new BridgeError(
       `Cannot reach the bridge at ${base}. Is it running? (cd backend/bridge/opencode-bridge && npm start)\n  ${err.message}`
@@ -203,16 +221,17 @@ async function assertBridgeReady(base) {
   }
 }
 
-async function get(base, path) {
-  const res = await fetch(`${base}${path}`)
+async function get(base, path, signal) {
+  const res = await fetch(`${base}${path}`, { signal })
   return await parse(res, base, path)
 }
 
-async function post(base, path, body) {
+async function post(base, path, body, signal) {
   const res = await fetch(`${base}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal,
   })
   return await parse(res, base, path)
 }

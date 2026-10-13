@@ -48,7 +48,7 @@ on:
         required: false
         type: string
       model:
-        description: 'Override the model, e.g. opencode/claude-sonnet-4-6'
+        description: 'Override the primary Zen model, e.g. opencode/big-pickle'
         required: false
         type: string
       force:
@@ -149,13 +149,18 @@ jobs:
           SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           BRIDGE_URL: http://127.0.0.1:4098
+          BRIDGE_MODEL: ${{ inputs.model || vars.BRIDGE_MODEL || 'opencode/big-pickle' }}
+          # Use "none" in the Actions variable to disable fallback. An unset
+          # variable selects the approved free Zen sequence.
+          BRIDGE_FALLBACK_MODELS: ${{ vars.BRIDGE_FALLBACK_MODELS || 'opencode/ling-3.1-flash-free,opencode/mimo-v2.6-flash-free' }}
+          INPUT_DATE: ${{ inputs.date }}
+          INPUT_FORCE: ${{ inputs.force }}
         run: |
-          ARGS=""
-          [ -n "${{ inputs.date }}" ]  && ARGS="$ARGS --date ${{ inputs.date }}"
-          [ -n "${{ inputs.model }}" ] && ARGS="$ARGS --model ${{ inputs.model }}"
-          [ "${{ inputs.force }}" = "true" ] && ARGS="$ARGS --force"
-          # shellcheck disable=SC2086
-          node scripts/generate-daily-devotion.js $ARGS
+          ARGS=()
+          [ -n "$INPUT_DATE" ] && ARGS+=(--date "$INPUT_DATE")
+          [ "$INPUT_FORCE" = "true" ] && ARGS+=(--force)
+          [ "$BRIDGE_FALLBACK_MODELS" = "none" ] && export BRIDGE_FALLBACK_MODELS=""
+          node scripts/generate-daily-devotion.js "${ARGS[@]}"
 
       # After the devotion, because the photo search uses its title, verse and
       # theme. continue-on-error is a second guard: the script already turns

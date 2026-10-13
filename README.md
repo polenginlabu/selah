@@ -277,21 +277,26 @@ The function reuses the study assistant's OpenAI-compatible endpoint and reads `
 
 **Model choice on OpenCode Zen.** Free "stealth" models like `big-pickle` only work inside OpenCode itself (their free tier requires an OpenCode session ID); a bare API call from an Edge Function is rejected with HTTP 400 `MissingSessionID`. Use a paid Zen model id instead — e.g. `deepseek-v4-flash` (chat) and `deepseek-v4-pro` (devotion), both on `https://opencode.ai/zen/v1` with the key from `opencode.ai/auth`.
 
-### Generating the devotion locally (the Big Pickle path)
+### Generating the devotion through the OpenCode bridge
 
-Because `big-pickle` free tier only runs inside an OpenCode session, it can't be the Edge Function's model — but a local script can open that session for you. `scripts/generate-daily-devotion.js` reuses the exact same topic picker and prompt (`topics.ts` / `prompt.ts`, loaded with Node's TS type-stripping), fetches the anchor verse, and then generates the devotion with `opencode run -m opencode/big-pickle`. It writes the finished row straight into `daily_devotions` with the service-role key, so the app serves it like any other.
+`scripts/generate-daily-devotion.js` sends the research brief through the local bridge to an OpenCode session. It validates the answer before writing one shared `daily_devotions` row for the date using the Supabase service-role key.
 
 ```bash
-cp .env.local.example .env.local   # then fill in the three values
-npm run devotion:generate          # picks topic, generates, saves today's row
-npm run devotion:dry-run           # same, but prints instead of saving (needs no credentials)
+cp .env.local.example .env.local   # fill in the required credentials
+npm run bridge:launch              # keep running in another terminal
+npm run devotion:generate          # researches, validates, saves today's row
+npm run devotion:dry-run           # invokes the model, prints without saving
 ```
 
-`.env.local` is gitignored; the service-role key comes from Supabase → Project Settings → API. Scope is one user by email via `auth.admin.listUsers`. Tests and `--dry-run` run the whole pipeline without writing (today: 6/6 topic tests pass).
+`--dry-run` still needs provider access and consumes model allowance; it skips database writes. `npm run devotion:test` runs offline tests. `.env.local` is gitignored.
 
-Trade-offs: a machine has to be running with opencode installed when the devotion is generated, and Big Pickle's free tier records its sessions, so it's fitting for a personal devotional — use the paid Zen models for anything confidential. If the Edge Functions are already deployed with `deepseek-v4-pro`, both paths can coexist; the first row written wins per `(user_id, date)`.
+**Automatic Zen fallback (daily devotions only):** `opencode/big-pickle` → `opencode/ling-3.1-flash-free` → `opencode/mimo-v2.6-flash-free`. These IDs are catalog-listed as free, not guaranteed to have unlimited allowance. Only completed provider budget/quota, rate-limit, or unavailable-model/service failures trigger switching. Each failed model is tried once, each attempt creates a fresh session, and switches are logged. The nine-minute overall deadline includes fallback and any content-validation retry; a validation retry retains the last working model. Authentication errors, tool failures, empty answers, connection failures and stalled/unfinished jobs do not trigger model switching. The server may still finish a job after the client times out; no fallback is launched in that case.
 
-Automation: a macOS LaunchAgent can run it daily, e.g. with `StartCalendarInterval Hour:6 Minute:50` and a zsh program of `cd "/path/to/selah-app" && node --experimental-strip-types scripts/generate-daily-devotion.js`. The script is idempotent, so an extra invocation is harmless.
+**Configuration:** `--model` selects the primary Zen model, then `BRIDGE_MODEL`, then Big Pickle. `BRIDGE_FALLBACK_MODELS` is a comma-separated ordered list; duplicates are removed. Set it to an empty value locally to disable fallback. Explicit process environment values override `.env.local`, which overrides `.env`. All devotion model IDs must be `opencode/model`.
+
+**GitHub Actions:** the *Daily devotion* workflow starts its own bridge/OpenCode stack. Configure repository Actions variables `BRIDGE_MODEL` and `BRIDGE_FALLBACK_MODELS`; unset variables use the sequence above. Use `none` for the fallback variable to disable it in Actions. The manual `model` input overrides the primary variable. `OPENCODE_AUTH_JSON` must contain valid Zen credentials for the runner. The local credential file alone does not configure Actions. Scheduled runs generate at 03:00 Asia/Manila and skip a date that already exists unless forced.
+
+**“Policy budget exceeded”:** check the Zen workspace allowance, billing and policy associated with the runner's credential. Switching models can recover a model-specific failure, but a shared workspace budget restriction may block the entire list. Exhausted fallback attempts preserve each model's provider error. Image generation and other agent jobs do not automatically switch models.
 
 ---
 

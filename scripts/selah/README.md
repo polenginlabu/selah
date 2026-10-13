@@ -14,6 +14,7 @@ nothing user-facing depends on it being reachable.
 | `agent-prompt.js` | The SELAH brief, verbatim. Edit the devotional's character here. |
 | `prompt.js` | Adds today's date, recent topic history, and the JSON contract. |
 | `bridge.js` | Talks to the bridge. Tools **on** — the research is the point. |
+| `devotionAgent.js` | Bounded Zen model fallback and the shared generation deadline. |
 | `devotion.js` | Parses and validates. The source-leak guard lives here. |
 | `cron.sh` | Cron entry point: locking, dependency startup, logging. |
 | `../generate-daily-devotion.js` | CLI. |
@@ -27,12 +28,21 @@ npm run devotion:test        # unit tests, no network needed
 
 node scripts/generate-daily-devotion.js --date 2026-09-20
 node scripts/generate-daily-devotion.js --force          # replace today's
-node scripts/generate-daily-devotion.js --model opencode/claude-sonnet-4-6
+node scripts/generate-daily-devotion.js --model opencode/big-pickle
 ```
 
 Takes 2–4 minutes: the agent runs several web searches and fetches before it
 writes. Rejected output is kept in `.selah-debug/` so a bad run can be
 diagnosed without paying for another.
+
+The default sequence is `opencode/big-pickle`, `opencode/ling-3.1-flash-free`,
+then `opencode/mimo-v2.6-flash-free`. Set `BRIDGE_MODEL` and the comma-separated
+`BRIDGE_FALLBACK_MODELS` to customize it. An empty fallback value disables
+switching locally. Only completed provider quota/budget, rate-limit and
+model/service-unavailable errors trigger fallback; each failed model is tried
+once. Switches are logged. Fallback and content-validation retries share a
+nine-minute deadline. A validation retry keeps the last working model.
+`--dry-run` still calls the provider and consumes allowance.
 
 ## Scheduling: GitHub Actions
 
@@ -72,6 +82,11 @@ the right day's devotion and a repeat produces nothing.
 Actions > Daily devotion > Run workflow. Optional inputs: `date`, `model`, and
 `force` to replace a day that already has one.
 
+Repository Actions variables `BRIDGE_MODEL` and `BRIDGE_FALLBACK_MODELS`
+configure scheduled runs; unset values use the default sequence above.
+Set the fallback variable to `none` to disable switching in Actions.
+The manual `model` input takes precedence over the primary variable.
+
 ### When a run fails
 
 The workflow uploads an artifact (`selah-debug-<run id>`) containing the agent
@@ -80,11 +95,11 @@ night is diagnosable without paying for another research run.
 
 ## Two things that will bite
 
-**The OpenCode spending cap.** `opencode/*` models are billed against a monthly
-workspace limit. Once it is reached they return an *empty reply*, not an error.
-`big-pickle` is the default because it is not billed against that cap. If
-devotions stop appearing, check
-`https://opencode.ai/workspace/<your-workspace>/billing` first.
+**The OpenCode spending cap.** Even catalog-listed free models can be blocked
+by provider policy or allowance. `Policy budget exceeded` is an upstream
+provider error. Fallback can recover model-specific failures, but a shared
+workspace restriction may block the whole list. Check the Zen allowance and
+billing policy for the credential stored in Actions' `OPENCODE_AUTH_JSON`.
 
 **Research sources must stay internal, and the prompt alone will not keep
 them there.** The brief researches trusted teachers to deepen the writing but

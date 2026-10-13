@@ -20,11 +20,13 @@
 // Env (.env.local, gitignored):
 //   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 //   BRIDGE_URL     (default http://127.0.0.1:4098)
-//   BRIDGE_MODEL   (default opencode/claude-sonnet-4-6)
+//   BRIDGE_MODEL   (default opencode/big-pickle)
+//   BRIDGE_FALLBACK_MODELS (comma-separated Zen IDs; empty disables fallback)
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { createClient } from '@supabase/supabase-js'
 import { buildDevotionPrompt, buildReformatPrompt } from './selah/prompt.js'
-import { runAgent, BridgeError, DEFAULT_MODEL } from './selah/bridge.js'
+import { BridgeError, DEFAULT_MODEL } from './selah/bridge.js'
+import { createDevotionAgent } from './selah/devotionAgent.js'
 import { extractJson, normalizeDevotion, toRow, DevotionError } from './selah/devotion.js'
 import { pickRandomTheme, slugify } from './selah/themes.js'
 
@@ -61,8 +63,9 @@ function loadEnv() {
     'SUPABASE_SERVICE_ROLE_KEY',
     'BRIDGE_URL',
     'BRIDGE_MODEL',
+    'BRIDGE_FALLBACK_MODELS',
   ]) {
-    if (!env[key] && process.env[key]) env[key] = process.env[key]
+    if (process.env[key] !== undefined) env[key] = process.env[key]
   }
   return env
 }
@@ -181,10 +184,14 @@ async function main() {
     history,
     config: { ...config, theme: theme.label },
   })
-  const model = args.model ?? env.BRIDGE_MODEL
-  // runAgent falls back to its own default when no model is passed, so log the
-  // model that will actually run — not just "default".
+  const model = (args.model ?? env.BRIDGE_MODEL)?.trim()
   const effectiveModel = model || DEFAULT_MODEL
+  const ask = createDevotionAgent({
+    model: effectiveModel,
+    fallbackModels: env.BRIDGE_FALLBACK_MODELS,
+    ...(env.BRIDGE_URL ? { bridgeUrl: env.BRIDGE_URL } : {}),
+    onProgress: (phase, message) => log(`  ${phase} — ${message}`),
+  })
 
   // The workflow uploads .selah-debug/ as an artifact every run, so writing the
   // prompt here makes the exact instruction visible in the Actions run without
@@ -195,12 +202,7 @@ async function main() {
   log(`asking the agent for ${date} (this researches the web and takes a few minutes)`)
 
   const started = Date.now()
-  const raw = await runAgent({
-    prompt,
-    ...(model ? { model } : {}),
-    ...(env.BRIDGE_URL ? { bridgeUrl: env.BRIDGE_URL } : {}),
-    onProgress: (phase, message) => log(`  ${phase} — ${message}`),
-  })
+  const raw = await ask(prompt)
   log(`agent finished in ${Math.round((Date.now() - started) / 1000)}s`)
 
   let devotion
@@ -220,12 +222,7 @@ async function main() {
         : `output rejected (${err.message}) — running again`
     )
 
-    const retry = await runAgent({
-      prompt: reformat ? buildReformatPrompt(raw, err.message) : prompt,
-      ...(model ? { model } : {}),
-      ...(env.BRIDGE_URL ? { bridgeUrl: env.BRIDGE_URL } : {}),
-      onProgress: (phase, message) => log(`  ${phase} — ${message}`),
-    })
+    const retry = await ask(reformat ? buildReformatPrompt(raw, err.message) : prompt)
     try {
       devotion = normalizeDevotion(extractJson(retry))
     } catch (retryErr) {
