@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 
-const SCRIPT_SRC = 'https://www.zackion-ai.com/chatbot.js'
+const SCRIPT_SRC = 'https://zackion-ai.com/chatbot.js'
 const BOT_KEY = 'zz_bot-6a00423c-7659-4bb3-b068-5e9e381a33a1'
 
 /**
