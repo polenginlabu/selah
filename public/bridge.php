@@ -60,9 +60,16 @@ const ALLOWED = [
     '/api/explain/stream' => 'POST',
 ];
 
-// Explain: per-reader limit on runs that miss the cache (cache hits are free).
-const EXPLAIN_RATE_LIMIT  = 10;
-const EXPLAIN_RATE_WINDOW = 3600;
+// Explain limits on runs that miss the cache (cache hits are always free).
+// Each uncached explanation is one premium request on the GitHub Copilot plan
+// the bridge uses, so the monthly cap is what protects that allowance. Both are
+// overridable with SetEnv EXPLAIN_MONTHLY_LIMIT / EXPLAIN_DAILY_LIMIT.
+// Periods follow the church's clock (Asia/Manila), not the server's.
+const EXPLAIN_MONTHLY_LIMIT = 1000;
+const EXPLAIN_DAILY_LIMIT   = 20;
+// The counters must outlive restarts: Apache's PHP has a private /tmp that is
+// wiped whenever Apache restarts, which would quietly reset the monthly cap.
+const EXPLAIN_STATE_DIR = '/var/lib/selah-explain';
 
 // Dynamic job lookups: /api/chat/status/<jobId>. The jobId is server-generated
 // as "job_" + base36, so we validate that shape rather than trusting the URL.
@@ -327,30 +334,35 @@ function explain_cache_put(string $reference, string $translation, string $conte
     );
 }
 
+function explain_limit(string $name, int $default): int {
+    $value = getenv($name);
+    return ($value !== false && ctype_digit($value)) ? (int) $value : $default;
+}
+
 /**
- * Records one uncached Explain run for this reader and reports whether it is
- * allowed. A file per user under flock: this server is the only writer, so
- * Postgres would add a round trip without adding safety.
+ * Counts one use against $limit for the current $period ("2026-10",
+ * "2026-10-30") and reports whether it was allowed. The file holds
+ * "period|count" and resets itself when the period changes. flock keeps two
+ * simultaneous requests from both taking the last slot.
+ *
+ * Fails CLOSED when the state directory is unusable: an unwritable counter
+ * must not turn into an unlimited one.
  */
-function explain_rate_limit_hit(string $userId): bool {
-    $file = sys_get_temp_dir() . '/selah_explain_rl_' . md5($userId) . '.txt';
-    $fh = @fopen($file, 'c+');
+function explain_counter_hit(string $name, string $period, int $limit): bool {
+    $fh = @fopen(EXPLAIN_STATE_DIR . '/' . $name . '.txt', 'c+');
     if ($fh === false) {
-        return true;
+        error_log('selah explain: cannot open counter in ' . EXPLAIN_STATE_DIR);
+        return false;
     }
     flock($fh, LOCK_EX);
-    $now = time();
-    [$start, $count] = array_map('intval', explode('|', (string) stream_get_contents($fh) . '|0|0'));
-    if ($start <= $now - EXPLAIN_RATE_WINDOW) {
-        [$start, $count] = [$now, 0];
-    }
-    $allowed = $count < EXPLAIN_RATE_LIMIT;
+    [$stored, $count] = explode('|', (string) stream_get_contents($fh) . '|0');
+    $count = ($stored === $period) ? (int) $count : 0;
+    $allowed = $count < $limit;
     if ($allowed) {
-        $count += 1;
+        ftruncate($fh, 0);
+        rewind($fh);
+        fwrite($fh, $period . '|' . ($count + 1));
     }
-    ftruncate($fh, 0);
-    rewind($fh);
-    fwrite($fh, $start . '|' . $count);
     flock($fh, LOCK_UN);
     fclose($fh);
     return $allowed;
@@ -386,8 +398,12 @@ if ($isExplain) {
         ]) . "\n";
         exit;
     }
-    if (!explain_rate_limit_hit($userId)) {
-        fail(429, 'You have reached the explanation limit for now. Try again later.');
+    $now = new DateTimeImmutable('now', new DateTimeZone('Asia/Manila'));
+    if (!explain_counter_hit('reader_' . md5($userId), $now->format('Y-m-d'), explain_limit('EXPLAIN_DAILY_LIMIT', EXPLAIN_DAILY_LIMIT))) {
+        fail(429, 'You have reached today\'s explanation limit. Try again tomorrow.');
+    }
+    if (!explain_counter_hit('monthly', $now->format('Y-m'), explain_limit('EXPLAIN_MONTHLY_LIMIT', EXPLAIN_MONTHLY_LIMIT))) {
+        fail(429, 'New explanations are paused until next month.');
     }
 
     // Pass every chunk on as it arrives: no PHP output buffering, no gzip.

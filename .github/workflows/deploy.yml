@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# Two quick pushes must not pull and restart on the server at the same time.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -23,6 +28,11 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # bridge.php ships inside dist/ and is the only server-side PHP; a syntax
+      # error there would break Explain and the admin agent for everyone.
+      - name: Check bridge.php syntax
+        run: php -l public/bridge.php
 
       - name: Build
         run: npm run build
@@ -42,6 +52,13 @@ jobs:
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -p "${{ secrets.HOSTINGER_PORT }}" "${{ secrets.HOSTINGER_HOST }}" >> ~/.ssh/known_hosts
+
+      # The bridge runs from the server's own checkout, not from dist/. Pull it
+      # first so the new bridge.php below never talks to an older bridge.
+      - name: Update server repo and bridge
+        run: |
+          ssh -p "${{ secrets.HOSTINGER_PORT }}" "${{ secrets.HOSTINGER_USER }}@${{ secrets.HOSTINGER_HOST }}" \
+            'cd /var/www/selah-app && before=$(git rev-parse HEAD) && git pull --ff-only -q && sh deploy/update-server.sh "$before"'
 
       - name: Sync build to Hostinger
         run: |
