@@ -56,7 +56,8 @@ const ALLOWED = [
     // Bible reader "Explain": open to any signed-in reader, not just admins.
     // The bridge builds the prompt from { reference, translation } itself and
     // runs it with every tool denied, so this route cannot direct the agent.
-    '/api/explain/start' => 'POST',
+    // Streamed straight through to the reader (see the Explain section below).
+    '/api/explain/stream' => 'POST',
 ];
 
 // Explain: per-reader limit on runs that miss the cache (cache hits are free).
@@ -154,14 +155,12 @@ if ($bridgeToken === '') {
 
 // ─── Gates ──────────────────────────────────────────────────────────────────
 //
-// The ask routes (start + session) touch the agent, so they require an admin.
-// Explain needs only a signed-in reader. A status poll needs a signed-in
-// reader up front and an admin once the job turns out not to be an Explain
-// job (checked after the bridge answers, below). health/models/model are
+// The ask routes (start + poll + session) touch the agent, so they require an
+// admin. Explain needs only a signed-in reader. health/models/model are
 // non-sensitive and stay public.
-$isExplain  = ($path === '/api/explain/start');
-$isAskRoute = ($path === '/api/chat/start' || $path === '/api/sessions');
-if ($isAskRoute || $isExplain || $isStatus) {
+$isExplain  = ($path === '/api/explain/stream');
+$isAskRoute = ($path === '/api/chat/start' || $path === '/api/sessions' || $isStatus);
+if ($isAskRoute || $isExplain) {
     if ($bridgeToken === '') {
         fail(503, 'BRIDGE_TOKEN is not configured on this server.');
     }
@@ -169,7 +168,7 @@ if ($isAskRoute || $isExplain || $isStatus) {
 if ($isAskRoute) {
     require_admin();
 }
-$userId = ($isExplain || $isStatus) ? require_user() : '';
+$userId = $isExplain ? require_user() : '';
 
 function read_bearer(): string {
     $auth = '';
@@ -357,29 +356,100 @@ function explain_rate_limit_hit(string $userId): bool {
     return $allowed;
 }
 
-// ─── Explain: answer from the cache, or check the rate limit ────────────────
+// ─── Explain: cache, rate limit, then stream the bridge straight through ────
+//
+// The reader gets newline-delimited JSON as the model writes it (see
+// POST /api/explain/stream in the bridge). A cache hit is a single "done" line.
+// The final "done" line carries the reference and translation the bridge
+// validated, and only then is the answer cached.
 
-if ($isExplain && $method === 'POST') {
-    $input = json_decode(file_get_contents('php://input') ?: '', true);
+if ($isExplain) {
+    $raw = file_get_contents('php://input') ?: '';
+    if (strlen($raw) > 2048) {
+        fail(413, 'Request body too large.');
+    }
+    $input = json_decode($raw, true);
     $reference = is_array($input) && is_string($input['reference'] ?? null) ? trim($input['reference']) : '';
     $translation = is_array($input) && is_string($input['translation'] ?? null) ? trim($input['translation']) : '';
     if ($reference === '' || $translation === '' || strlen($reference) > 120 || strlen($translation) > 60) {
         fail(400, 'A verse reference and translation are required.');
     }
+
     $hit = explain_cache_get($reference, $translation, read_bearer());
     if ($hit !== null) {
+        header('Content-Type: application/x-ndjson; charset=utf-8');
         echo json_encode([
-            'success' => true,
-            'cached'  => true,
-            'done'    => true,
-            'response' => (string) $hit['content'],
-            'model'   => (string) ($hit['model'] ?? ''),
-        ]);
+            'type'   => 'done',
+            'cached' => true,
+            'text'   => (string) $hit['content'],
+            'model'  => (string) ($hit['model'] ?? ''),
+        ]) . "\n";
         exit;
     }
     if (!explain_rate_limit_hit($userId)) {
         fail(429, 'You have reached the explanation limit for now. Try again later.');
     }
+
+    // Pass every chunk on as it arrives: no PHP output buffering, no gzip.
+    set_time_limit(240);
+    if (function_exists('apache_setenv')) {
+        @apache_setenv('no-gzip', '1');
+    }
+    @ini_set('zlib.output_compression', '0');
+    while (ob_get_level() > 0) {
+        ob_end_flush();
+    }
+
+    $status = 0;
+    $streamed = '';
+    $headersSent = false;
+    $ch = curl_init(BRIDGE_ORIGIN . $path);
+    curl_setopt_array($ch, [
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => json_encode(['reference' => $reference, 'translation' => $translation]),
+        CURLOPT_TIMEOUT        => 230,
+        CURLOPT_CONNECTTIMEOUT => 5,
+        CURLOPT_HTTPHEADER     => [
+            'Accept: application/x-ndjson',
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . $bridgeToken,
+            'X-Forwarded-For: ' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'),
+            'X-Forwarded-Proto: https',
+        ],
+        CURLOPT_WRITEFUNCTION  => function ($ch, string $chunk) use (&$streamed, &$headersSent, &$status): int {
+            if (!$headersSent) {
+                $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                http_response_code($status ?: 502);
+                header($status === 200 ? 'Content-Type: application/x-ndjson; charset=utf-8' : 'Content-Type: application/json');
+                header('Cache-Control: no-store');
+                header('X-Accel-Buffering: no');
+                $headersSent = true;
+            }
+            $streamed .= $chunk;
+            echo $chunk;
+            flush();
+            // A reader who closed the sheet stops the run (the bridge sees the
+            // connection close and cancels the OpenCode session).
+            return connection_aborted() ? 0 : strlen($chunk);
+        },
+    ]);
+    curl_exec($ch);
+    $error = curl_error($ch);
+    curl_close($ch);
+
+    if (!$headersSent) {
+        fail(502, 'Could not reach the bridge on ' . BRIDGE_ORIGIN . ': ' . $error);
+    }
+    if ($status === 200) {
+        $lines = preg_split('/\n/', trim($streamed));
+        $last = json_decode((string) end($lines), true);
+        if (is_array($last) && ($last['type'] ?? '') === 'done'
+            && trim((string) ($last['text'] ?? '')) !== ''
+            && is_string($last['reference'] ?? null) && is_string($last['translation'] ?? null)) {
+            explain_cache_put($last['reference'], $last['translation'], (string) $last['text'], (string) ($last['model'] ?? ''));
+        }
+    }
+    exit;
 }
 
 // ─── Forward ────────────────────────────────────────────────────────────────
@@ -438,25 +508,6 @@ if ($response === false || $status === 0) {
         'detail' => $error,
     ]);
     exit;
-}
-
-// A status poll reveals the job's prompt and answer. Readers may follow their
-// Explain jobs; anything else (the admin agent's asks) stays admin-only.
-if ($isStatus) {
-    $job = json_decode((string) $response, true);
-    $isExplainJob = is_array($job) && ($job['kind'] ?? '') === 'explain';
-    if (!$isExplainJob) {
-        require_admin();
-    } elseif (!empty($job['done']) && empty($job['error'])
-        && trim((string) ($job['response'] ?? '')) !== ''
-        && is_array($job['explain'] ?? null)) {
-        explain_cache_put(
-            (string) $job['explain']['reference'],
-            (string) $job['explain']['translation'],
-            (string) $job['response'],
-            (string) ($job['model'] ?? '')
-        );
-    }
 }
 
 http_response_code($status);

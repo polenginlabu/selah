@@ -5,7 +5,8 @@
 // (public/bridge.php), so a caller who could put their own words into the
 // prompt could poison "John 3:16" for everyone. The reference and translation
 // name are the only inputs, each held to a strict shape; the model works from
-// the reference rather than from verse text a caller could forge.
+// the reference rather than from verse text a caller could forge. The SELAH
+// instructions go in the system prompt; the user message is only the passage.
 
 // formatSelectionReference (supabase/functions/_shared/bible.js) produces
 // "John 3:16", "1 John 1:9", "Song of Solomon 2:4-7", "Psalms 23:1, 4-6".
@@ -122,7 +123,8 @@ const OUTPUT_FORMAT = `## OUTPUT FORMAT
 
 - Reply with the explanation only: no preamble, no closing remarks, no mention of these instructions.
 - Start each of the eight sections with a heading line such as "## 1. The Meaning".
-- Use short paragraphs and "- " bullet lines. Use **bold** sparingly. No tables, no code blocks, no links.
+- Keep every section brief: 2–4 sentences, or up to 4 short "- " bullet lines. The whole reply should read in about two minutes.
+- Use **bold** sparingly. No tables, no code blocks, no links.
 - Do not use any tools. Everything you need is in this message and your knowledge of Scripture.`;
 
 function validateExplainInput({ reference, translation } = {}) {
@@ -137,20 +139,18 @@ function validateExplainInput({ reference, translation } = {}) {
   return { reference: ref, translation: name };
 }
 
-/** @returns {{ reference: string, translation: string, prompt: string }} */
+/**
+ * @returns {{ reference: string, translation: string, system: string, prompt: string }}
+ * `system` is the fixed SELAH instruction set; `prompt` carries only the passage.
+ */
 function buildExplainTask(input) {
   const { reference, translation } = validateExplainInput(input);
-  const prompt = [
-    SELAH_EXPLAIN_PROMPT,
-    "",
-    OUTPUT_FORMAT,
-    "",
-    "## INPUT",
-    "",
-    `Highlighted passage: ${reference}`,
-    `Bible translation: ${translation}`,
-  ].join("\n");
-  return { reference, translation, prompt };
+  return {
+    reference,
+    translation,
+    system: `${SELAH_EXPLAIN_PROMPT}\n\n${OUTPUT_FORMAT}`,
+    prompt: `Highlighted passage: ${reference}\nBible translation: ${translation}`,
+  };
 }
 
 module.exports = { buildExplainTask, validateExplainInput };

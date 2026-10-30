@@ -48,14 +48,14 @@ test("refuses non-string input", () => {
   assert.throws(() => validateExplainInput(), /valid verse reference/);
 });
 
-test("the task is the SELAH prompt with the passage as its input", () => {
+test("the task is the SELAH system prompt with only the passage as input", () => {
   const task = buildExplainTask({ reference: " John 3:16 ", translation: "King James Version" });
   assert.equal(task.reference, "John 3:16");
-  assert.match(task.prompt, /^# ROLE: SELAH/);
+  assert.match(task.system, /^# ROLE: SELAH/);
   for (const section of ["THE MEANING", "BIBLICAL CONTEXT", "THEOLOGICAL INSIGHT", "WHAT IS GOD TEACHING US?",
     "CROSS-REFERENCES", "PERSONAL APPLICATION", "HEART REFLECTION", "PRAYER"]) {
-    assert.ok(task.prompt.includes(section), section);
+    assert.ok(task.system.includes(section), section);
   }
-  assert.match(task.prompt, /Do not use any tools/);
-  assert.match(task.prompt, /## INPUT\n\nHighlighted passage: John 3:16\nBible translation: King James Version$/);
+  assert.match(task.system, /Do not use any tools/);
+  assert.equal(task.prompt, "Highlighted passage: John 3:16\nBible translation: King James Version");
 });
