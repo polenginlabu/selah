@@ -30,7 +30,7 @@ import { buildAskTask } from '../lib/askTask.js'
 // belongs to the study assistant (src/lib/bibleChatBridge.js) and is set to
 // loopback in .env, so reusing it pointed the PRODUCTION build at 127.0.0.1
 // and silently broke the deployed form.
-const BRIDGE_BASE =
+export const BRIDGE_BASE =
   import.meta.env.VITE_AGENT_BRIDGE_URL ||
   (import.meta.env.DEV
     ? 'http://127.0.0.1:4098'
@@ -39,7 +39,7 @@ const BRIDGE_BASE =
 // Only the PHP shim needs the caller's JWT — it uses it for the admin gate.
 // Talking to the bridge directly, there is nothing to present it to, and a
 // local bridge runs without BRIDGE_TOKEN (see backend/bridge/opencode-bridge).
-const NEEDS_JWT = !BRIDGE_BASE.startsWith('http://127.0.0.1')
+export const NEEDS_JWT = !BRIDGE_BASE.startsWith('http://127.0.0.1')
 // big-pickle is outside the OpenCode workspace spending cap; every other
 // opencode/* model returns an empty reply once that cap is hit.
 const ASK_MODEL = 'opencode/big-pickle'

@@ -16,6 +16,9 @@
 const express = require("express");
 const cors = require("cors");
 const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { buildExplainTask } = require("./explainPrompt");
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -77,6 +80,29 @@ const IDLE_STALL_MS = Number(process.env.BRIDGE_IDLE_STALL_MS || 120000);
 // every call out of this bridge carries it when the variable is set. Leave it
 // unset for a laptop, where loopback really is private.
 const OPENCODE_PASSWORD = process.env.OPENCODE_SERVER_PASSWORD || "";
+
+// Bible reader "Explain" (POST /api/explain/start). Unlike every other route,
+// this one is reachable by any signed-in reader through public/bridge.php, so
+// each run is boxed in three ways rather than trusting any one of them:
+//   - an OpenCode agent whose permissions deny every tool (see deploy/README),
+//   - every built-in tool switched off in the prompt itself, in case that
+//     agent is missing from the server's OpenCode config,
+//   - an empty scratch directory as the workspace, never the repository.
+// Each run also gets its own throwaway OpenCode session, so readers never share
+// a conversation with each other or with the admin agent.
+const EXPLAIN_MODEL = process.env.BRIDGE_EXPLAIN_MODEL || "opencode/big-pickle";
+const EXPLAIN_AGENT = process.env.BRIDGE_EXPLAIN_AGENT || "selah-explain";
+const EXPLAIN_DIRECTORY = path.join(os.tmpdir(), "selah-explain");
+// A 2 GB VPS runs this next to the admin agent; past this many concurrent
+// explanations new ones get 429 and the reader falls back to Zackion.
+const EXPLAIN_MAX_CONCURRENT = Number(process.env.BRIDGE_EXPLAIN_MAX_CONCURRENT || 3);
+const EXPLAIN_DISABLED_TOOLS = Object.fromEntries(
+  [
+    "bash", "edit", "write", "read", "grep", "glob", "list", "patch",
+    "multiedit", "webfetch", "websearch", "codesearch", "task",
+    "todowrite", "todoread", "skill", "lsp",
+  ].map((name) => [name, false])
+);
 
 function opencodeAuthHeader() {
   if (!OPENCODE_PASSWORD) return {};
@@ -533,13 +559,38 @@ function getCompletedToolNames(messageItem) {
   return names;
 }
 
-async function executeChatJob(job, message, model) {
+/**
+ * Runs a job in its own throwaway OpenCode session, outside the shared
+ * session list, and deletes that session afterwards.
+ *
+ * @param {{ directory: string, agent?: string, tools?: Record<string, boolean> }} options
+ */
+async function executeIsolatedJob(job, message, model, options) {
+  fs.mkdirSync(options.directory, { recursive: true });
+  const session = await opencodeFetch("/session", {
+    method: "POST",
+    body: JSON.stringify({ title: `isolated ${job.id}` }),
+    directory: options.directory,
+  });
+  try {
+    await executeChatJob(job, message, model, { ...options, opencodeSessionId: session.id });
+  } finally {
+    opencodeFetch(`/session/${session.id}`, {
+      method: "DELETE",
+      directory: options.directory,
+    }).catch((err) => console.error(`[isolated-job] Could not delete session: ${err.message}`));
+  }
+}
+
+async function executeChatJob(job, message, model, options = {}) {
   updateJob(job, { phase: "thinking", message: "OpenCode is thinking..." });
 
-  const opencodeSessionId = await ensureSession();
-  const localSessionId = activeSessionId;
-  const localSession = sessions.get(localSessionId);
-  if (!localSession) {
+  const isolated = Boolean(options.opencodeSessionId);
+  const directory = options.directory || activeRootPath;
+  const opencodeSessionId = isolated ? options.opencodeSessionId : await ensureSession();
+  const localSessionId = isolated ? null : activeSessionId;
+  const localSession = isolated ? null : sessions.get(localSessionId);
+  if (!isolated && !localSession) {
     throw new Error("Active session missing");
   }
 
@@ -552,7 +603,13 @@ async function executeChatJob(job, message, model) {
 
   const modelToUse = model || activeModel;
   const modelObject = await resolveModelObject(modelToUse);
-  const payload = buildMessagePayload(message, modelObject);
+  // An isolated run has no workspace to point the agent at, so it skips the
+  // "Workspace root" preamble buildMessagePayload adds.
+  const payload = isolated
+    ? { parts: [{ type: "text", text: message.trim() }], ...(modelObject ? { model: modelObject } : {}) }
+    : buildMessagePayload(message, modelObject);
+  if (options.agent) payload.agent = options.agent;
+  if (options.tools) payload.tools = options.tools;
   const promptText = payload.parts?.[0]?.text || message.trim();
   const startedAt = Date.now();
   updateJob(job, {
@@ -563,7 +620,7 @@ async function executeChatJob(job, message, model) {
   await opencodeFetch(`/session/${opencodeSessionId}/prompt_async`, {
     method: "POST",
     body: JSON.stringify(payload),
-    directory: activeRootPath,
+    directory,
   });
 
   let responseText = "";
@@ -575,7 +632,7 @@ async function executeChatJob(job, message, model) {
   while (Date.now() < deadline) {
     const latestMessages = await opencodeFetch(
       `/session/${opencodeSessionId}/message?limit=30`,
-      { directory: activeRootPath }
+      { directory }
     );
 
     if (!trackedUserMessageId) {
@@ -714,7 +771,7 @@ async function executeChatJob(job, message, model) {
     throw new Error("OpenCode request timed out after 10 minutes");
   }
 
-  localSession.messages.push(
+  localSession?.messages.push(
     { role: "user", content: message.trim() },
     { role: "ai", content: responseText }
   );
@@ -1114,6 +1171,46 @@ app.post("/api/chat/start", async (req, res) => {
 });
 
 /**
+ * POST /api/explain/start
+ * Starts a Bible reader "Explain" job for { reference, translation }; poll it
+ * with /api/chat/status/:jobId. The prompt is built here (explainPrompt.js),
+ * never taken from the caller.
+ */
+app.post("/api/explain/start", (req, res) => {
+  let task;
+  try {
+    task = buildExplainTask(req.body ?? {});
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+
+  let running = 0;
+  for (const job of chatJobs.values()) {
+    if (job.kind === "explain" && !job.done) running += 1;
+  }
+  if (running >= EXPLAIN_MAX_CONCURRENT) {
+    return res.status(429).json({ error: "Too many explanations are running. Try again shortly." });
+  }
+
+  const job = createChatJob(task.prompt, EXPLAIN_MODEL);
+  Object.assign(job, {
+    kind: "explain",
+    explain: { reference: task.reference, translation: task.translation },
+  });
+
+  executeIsolatedJob(job, task.prompt, EXPLAIN_MODEL, {
+    directory: EXPLAIN_DIRECTORY,
+    agent: EXPLAIN_AGENT,
+    tools: EXPLAIN_DISABLED_TOOLS,
+  }).catch((err) => {
+    console.error("[explain-job] Error:", err.message);
+    failJob(job, err.message);
+  });
+
+  res.json({ success: true, jobId: job.id, phase: job.phase, message: job.message });
+});
+
+/**
  * GET /api/chat/status/:jobId
  * Returns current state for a polling chat job.
  */
@@ -1127,6 +1224,10 @@ app.get("/api/chat/status/:jobId", (req, res) => {
   res.json({
     success: true,
     jobId: job.id,
+    // bridge.php reads these: only "explain" jobs are visible to non-admins,
+    // and a finished one is cached under its reference + translation.
+    kind: job.kind || "chat",
+    explain: job.explain || null,
     done: job.done,
     phase: job.phase,
     message: job.message,
@@ -1598,6 +1699,7 @@ app.listen(BRIDGE_PORT, BRIDGE_HOST, () => {
 ║    POST /api/model         — set active model             ║
 ║    POST /api/chat          — send a message               ║
 ║    POST /api/chat/stream   — stream message realtime      ║
+║    POST /api/explain/start — Bible reader explanation job ║
 ║    GET  /api/sessions      — list all sessions            ║
 ║    POST /api/sessions      — create new session           ║
 ║    POST /api/sessions/:id/activate — switch session       ║

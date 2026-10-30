@@ -705,7 +705,7 @@ export default function BibleReader() {
       onCopy={copySelection}
       onShare={() => setCardOpen(true)}
       onReflect={() => navigate('/devotion/new', { state: { verse: selection } })}
-      onExplain={ZACKION_URL ? () => setExplainOpen(true) : undefined}
+      onExplain={user || ZACKION_URL ? () => setExplainOpen(true) : undefined}
       onToggleSave={handleToggleSave}
       onOpenSaved={openSaved}
       onClose={() => {
@@ -721,7 +721,7 @@ export default function BibleReader() {
     />}
 
     {cardOpen && selection && <VerseCardSheet selection={selection} translation={version.abbreviation} onClose={() => setCardOpen(false)} />}
-    {explainOpen && selection && <ExplainSheet reference={selection.reference} url={ZACKION_URL} onClose={() => setExplainOpen(false)} />}
+    {explainOpen && selection && <ExplainSheet reference={selection.reference} translation={selection.translation} zackionUrl={ZACKION_URL} onClose={() => setExplainOpen(false)} />}
 
     {sheet && <BibleReaderSheet title={{ passage: 'Choose a passage', translation: 'Bible translations', appearance: 'Reading appearance', search: 'Search Scripture', saved: 'Saved verses' }[sheet]} onClose={() => setSheet(null)}>
       {sheet === 'passage' && <BibleLocationPicker currentBook={book} currentChapter={chapter} onSelect={goTo} />}

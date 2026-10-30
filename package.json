@@ -25,7 +25,8 @@
     "bridge": "OPENCODE_ROOT_PATH=\"$PWD\" npm start --prefix backend/bridge/opencode-bridge",
     "bridge:launch": "sh scripts/selah/launch.sh",
     "bridge:install": "npm ci --prefix backend/bridge/opencode-bridge",
-    "agent:test": "node --test scripts/selah/agentTask.test.js"
+    "agent:test": "node --test scripts/selah/agentTask.test.js",
+    "explain:test": "node --test src/lib/selahExplain.test.js backend/bridge/opencode-bridge/explainPrompt.test.js"
   },
   "dependencies": {
     "@lottiefiles/dotlottie-react": "^0.19.16",

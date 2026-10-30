@@ -1,12 +1,17 @@
-// "Explain" sheet for a verse selection: streams a Zackion AI explanation of
-// the reference (src/lib/zackion.js) and renders its Markdown as React
-// elements (src/lib/safeMarkdown.js) — remote text never reaches innerHTML.
-// The request is aborted when the sheet closes, on Retry, or when the
-// reference changes; nothing is cached.
+// "Explain" sheet for a verse selection. SELAH answers first: the OpenCode
+// bridge runs the SELAH study prompt (src/lib/selahExplain.js), from the
+// shared cache when another reader already asked. If SELAH is unreachable,
+// busy, rate-limited or too slow, the sheet falls back to the Zackion AI
+// endpoint (src/lib/zackion.js). Markdown is rendered as React elements
+// (src/lib/safeMarkdown.js) — remote text never reaches innerHTML. The request
+// is aborted when the sheet closes, on Retry, or when the reference changes.
 import { Fragment, useEffect, useState } from 'react'
 import { ChatIcon } from '../icons'
 import { BibleReaderSheet } from './BibleReaderSheet'
 import { explainVerse } from '../lib/zackion'
+import { explainWithSelah } from '../lib/selahExplain'
+import { BRIDGE_BASE, NEEDS_JWT } from '../data/agent'
+import { supabase } from '../lib/supabase'
 import { parseMarkdown } from '../lib/safeMarkdown'
 
 function Inline({ tokens }) {
@@ -24,32 +29,61 @@ function Markdown({ text }) {
   </p>)
 }
 
-export default function ExplainSheet({ reference, url, onClose }) {
+const getToken = NEEDS_JWT
+  ? async () => (await supabase.auth.getSession()).data.session?.access_token ?? null
+  : undefined
+
+const SOURCE_LABEL = { selah: 'Explained by SELAH', zackion: 'Explained by Zackion' }
+
+export default function ExplainSheet({ reference, translation, zackionUrl, onClose }) {
   const [attempt, setAttempt] = useState(0)
   const [status, setStatus] = useState('loading')
+  const [source, setSource] = useState('selah')
   const [text, setText] = useState('')
   const [error, setError] = useState('')
 
   useEffect(() => {
     const controller = new AbortController()
+    const { signal } = controller
+    const show = (t) => { if (!signal.aborted) setText(t) }
     setStatus('loading')
+    setSource('selah')
     setText('')
     setError('')
-    explainVerse({ url, reference, signal: controller.signal, onText: (t) => { if (!controller.signal.aborted) setText(t) } })
-      .then(() => { if (!controller.signal.aborted) setStatus('done') })
+
+    const run = async () => {
+      try {
+        await explainWithSelah({
+          base: BRIDGE_BASE, reference, translation, signal, getToken, onText: show,
+        })
+        return
+      } catch (err) {
+        if (signal.aborted || err?.name === 'AbortError') throw err
+        if (!zackionUrl) throw err
+        console.warn('[explain] SELAH unavailable, using Zackion:', err?.message)
+      }
+      if (signal.aborted) return
+      setSource('zackion')
+      setText('')
+      await explainVerse({ url: zackionUrl, reference, signal, onText: show })
+    }
+
+    run()
+      .then(() => { if (!signal.aborted) setStatus('done') })
       .catch((err) => {
-        if (controller.signal.aborted || err?.name === 'AbortError') return
+        if (signal.aborted || err?.name === 'AbortError') return
         setError(err?.message || 'Could not load the explanation.')
         setStatus('error')
       })
     return () => controller.abort()
-  }, [url, reference, attempt])
+  }, [zackionUrl, reference, translation, attempt])
 
   const title = `Explain ${reference}`
   return <BibleReaderSheet title={title} onClose={onClose}>
     {status === 'loading' && !text && <div role="status" aria-label="Loading explanation" className="space-y-3 py-2">
       {[100, 92, 100, 64].map((width, i) => <div key={i} className="h-3 rounded bg-raised" style={{ width: `${width}%` }} />)}
       <span className="sr-only">Loading explanation…</span>
+      {source === 'selah' && <p className="pt-2 text-sm text-muted">SELAH is studying this passage. The first explanation can take up to a minute.</p>}
     </div>}
     {status === 'error' && <div role="alert" className="rounded-2xl border border-line bg-surface p-6 text-center">
       <ChatIcon className="mx-auto text-muted" width={26} height={26} /><h3 className="mt-3 text-lg">Let’s try that again</h3>
@@ -61,6 +95,7 @@ export default function ExplainSheet({ reference, url, onClose }) {
     </div>}
     <div className="mt-6 flex items-center justify-between gap-3 border-t border-line pt-4">
       <button onClick={onClose} className="btn-outline min-h-11">Close</button>
+      {status === 'done' && <span className="text-xs text-muted">{SOURCE_LABEL[source]}</span>}
     </div>
   </BibleReaderSheet>
 }
