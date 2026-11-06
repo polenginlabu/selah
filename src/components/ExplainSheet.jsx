@@ -5,7 +5,7 @@
 // endpoint (src/lib/zackion.js). Markdown is rendered as React elements
 // (src/lib/safeMarkdown.js) — remote text never reaches innerHTML. The request
 // is aborted when the sheet closes, on Retry, or when the reference changes.
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { ChatIcon } from '../icons'
 import { BibleReaderSheet } from './BibleReaderSheet'
 import { explainVerse } from '../lib/zackion'
@@ -13,6 +13,7 @@ import { explainWithSelah } from '../lib/selahExplain'
 import { BRIDGE_BASE, NEEDS_JWT } from '../data/agent'
 import { supabase } from '../lib/supabase'
 import { parseMarkdown } from '../lib/safeMarkdown'
+import { copyText } from '../lib/copyText'
 
 function Inline({ tokens }) {
   return tokens.map((t, i) => t.type === 'strong' ? <strong key={i}><Inline tokens={t.children} /></strong>
@@ -41,8 +42,22 @@ export default function ExplainSheet({ reference, translation, zackionUrl, onClo
   const [source, setSource] = useState('selah')
   const [text, setText] = useState('')
   const [error, setError] = useState('')
+  const [copyState, setCopyState] = useState('idle')
+  const copyTimer = useRef(null)
+
+  useEffect(() => () => clearTimeout(copyTimer.current), [])
+
+  const handleCopy = async () => {
+    let ok = false
+    try { ok = await copyText(text) } catch { ok = false }
+    setCopyState(ok ? 'copied' : 'failed')
+    clearTimeout(copyTimer.current)
+    copyTimer.current = setTimeout(() => setCopyState('idle'), 2000)
+  }
 
   useEffect(() => {
+    clearTimeout(copyTimer.current)
+    setCopyState('idle')
     const controller = new AbortController()
     const { signal } = controller
     const show = (t) => { if (!signal.aborted) setText(t) }
@@ -95,7 +110,16 @@ export default function ExplainSheet({ reference, translation, zackionUrl, onClo
     </div>}
     <div className="mt-6 flex items-center justify-between gap-3 border-t border-line pt-4">
       <button onClick={onClose} className="btn-outline min-h-11">Close</button>
-      {status === 'done' && <span className="text-xs text-muted">{SOURCE_LABEL[source]}</span>}
+      <div className="flex items-center gap-3">
+        {status === 'done' && text.trim() && <button type="button" onClick={handleCopy} className="btn-outline min-h-11"
+          aria-label={copyState === 'copied' ? 'Explanation copied' : 'Copy explanation'}>
+          {copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Copy failed' : 'Copy'}
+        </button>}
+        {status === 'done' && <span className="text-xs text-muted">{SOURCE_LABEL[source]}</span>}
+      </div>
+      <span role="status" aria-live="polite" className="sr-only">
+        {copyState === 'copied' ? 'Explanation copied' : copyState === 'failed' ? 'Copy failed' : ''}
+      </span>
     </div>
   </BibleReaderSheet>
 }
